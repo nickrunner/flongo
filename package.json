@@ -1,0 +1,49 @@
+{
+  "name": "flongo",
+  "version": "0.1.0",
+  "description": "Firestore-like fluent query API for MongoDB",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest",
+    "test:watch": "vitest --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mongodb",
+    "firestore",
+    "query",
+    "fluent",
+    "database",
+    "nosql"
+  ],
+  "author": "Nick Schrock",
+  "license": "MIT",
+  "dependencies": {
+    "mongodb": "^6.0.0",
+    "geofire-common": "^6.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0",
+    "@types/node": "^20.0.0"
+  },
+  "peerDependencies": {
+    "mongodb": ">=5.0.0"
+  },
+  "files": [
+    "dist/**/*",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YOUR_USERNAME/flongo.git"
+  },
+  "bugs": {
+    "url": "https://github.com/YOUR_USERNAME/flongo/issues"
+  },
+  "homepage": "https://github.com/YOUR_USERNAME/flongo#readme"
+}
