@@ -42,34 +42,36 @@ describe('FlongoCollection', () => {
   let mockCollection: any;
   let mockEventsCollection: any;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     
     // Get the mocked db and collections
-    const { flongoDb } = require('../flongo');
-    mockDb = flongoDb;
+    const flongoModule = await import('../flongo');
+    mockDb = flongoModule.flongoDb;
     
     // Create separate mock collections for data and events
+    const mockCursor = {
+      toArray: vi.fn().mockResolvedValue([]),
+      limit: vi.fn().mockReturnThis(),
+      skip: vi.fn().mockReturnThis(),
+      sort: vi.fn().mockReturnThis()
+    };
+    
     mockCollection = {
       findOne: vi.fn(),
-      find: vi.fn(() => ({
-        toArray: vi.fn(),
-        limit: vi.fn().mockReturnThis(),
-        skip: vi.fn().mockReturnThis(),
-        sort: vi.fn().mockReturnThis()
-      })),
-      insertOne: vi.fn(),
-      insertMany: vi.fn(),
-      updateOne: vi.fn(),
-      updateMany: vi.fn(),
-      deleteOne: vi.fn(),
-      deleteMany: vi.fn(),
-      countDocuments: vi.fn(),
+      find: vi.fn(() => mockCursor),
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'mock-id' }),
+      insertMany: vi.fn().mockResolvedValue({ insertedIds: [] }),
+      updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
+      updateMany: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
+      deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
+      deleteMany: vi.fn().mockResolvedValue({ deletedCount: 1 }),
+      countDocuments: vi.fn().mockResolvedValue(0),
       findOneAndUpdate: vi.fn()
     };
 
     mockEventsCollection = {
-      insertOne: vi.fn()
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'event-id' })
     };
 
     // Mock db.collection to return different collections based on name
@@ -91,6 +93,9 @@ describe('FlongoCollection', () => {
     });
 
     it('should create collection with custom options', () => {
+      // Clear previous calls from beforeEach
+      mockDb.collection.mockClear();
+      
       const coll = new FlongoCollection<TestUser>('users', {
         enableEventLogging: false
       });

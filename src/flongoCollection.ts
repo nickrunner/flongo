@@ -115,7 +115,7 @@ export class FlongoCollection<T> {
    */
   async getAll(query?: FlongoQuery, pagination?: Pagination): Promise<(Entity & T)[]> {
     const mongodbQuery: Filter<Entity & T> = query?.build() ?? {};
-    const mongodbOptions: FindOptions<Entity & T> = query?.buildOptions(pagination) ?? {};
+    const mongodbOptions: FindOptions<Entity & T> = query?.buildOptions(pagination) ?? (new FlongoQuery()).buildOptions(pagination);
 
     try {
       const res = await this.collection.find(mongodbQuery, mongodbOptions).toArray();
@@ -418,7 +418,7 @@ export class FlongoCollection<T> {
   async decrement(id: string, key: string, amt?: number): Promise<void> {
     await this.collection.updateOne(
       { _id: new ObjectId(id) } as any,
-      { $inc: { [key]: amt ?? -1 } } as any
+      { $inc: { [key]: -(amt ?? 1) } } as any
     );
   }
 

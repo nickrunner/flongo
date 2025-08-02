@@ -28,20 +28,67 @@ vi.mock('../flongo', () => {
         return null;
       }),
 
-      find: vi.fn((query: any = {}) => ({
-        toArray: vi.fn(async () => {
-          const results = [];
-          for (const [id, doc] of data.entries()) {
-            if (matchesQuery(doc, query)) {
-              results.push(doc);
+      find: vi.fn((query: any = {}, options: any = {}) => {
+        let limitValue: number | undefined;
+        let skipValue: number = 0;
+        let sortValue: any;
+        
+        const cursor = {
+          toArray: vi.fn(async () => {
+            let results = [];
+            for (const [id, doc] of data.entries()) {
+              if (matchesQuery(doc, query)) {
+                results.push(doc);
+              }
             }
-          }
-          return results;
-        }),
-        limit: vi.fn().mockReturnThis(),
-        skip: vi.fn().mockReturnThis(),
-        sort: vi.fn().mockReturnThis()
-      })),
+            
+            // Apply sorting if specified
+            if (sortValue) {
+              results.sort((a, b) => {
+                for (const [field, direction] of Object.entries(sortValue)) {
+                  const aVal = a[field];
+                  const bVal = b[field];
+                  if (aVal < bVal) return direction === 1 ? -1 : 1;
+                  if (aVal > bVal) return direction === 1 ? 1 : -1;
+                }
+                return 0;
+              });
+            }
+            
+            // Apply pagination
+            if (skipValue > 0) {
+              results = results.slice(skipValue);
+            }
+            if (limitValue !== undefined) {
+              results = results.slice(0, limitValue);
+            }
+            
+            // Apply options-based pagination (used by FlongoCollection)
+            if (options.skip !== undefined) {
+              results = results.slice(options.skip);
+            }
+            if (options.limit !== undefined) {
+              results = results.slice(0, options.limit);
+            }
+            
+            return results;
+          }),
+          limit: vi.fn((value: number) => {
+            limitValue = value;
+            return cursor;
+          }),
+          skip: vi.fn((value: number) => {
+            skipValue = value;
+            return cursor;
+          }),
+          sort: vi.fn((value: any) => {
+            sortValue = value;
+            return cursor;
+          })
+        };
+        
+        return cursor;
+      }),
 
       insertOne: vi.fn(async (doc: any) => {
         const id = `507f1f77bcf86cd79943901${idCounter++}`;
@@ -64,8 +111,48 @@ vi.mock('../flongo', () => {
       updateOne: vi.fn(async (filter: any, update: any) => {
         if (filter._id) {
           const doc = data.get(filter._id.toString());
-          if (doc && update.$set) {
-            const updated = { ...doc, ...update.$set };
+          if (doc) {
+            let updated = { ...doc };
+            
+            // Handle $set operations
+            if (update.$set) {
+              updated = { ...updated, ...update.$set };
+            }
+            
+            // Handle $inc operations (atomic increment/decrement)
+            if (update.$inc) {
+              for (const [field, value] of Object.entries(update.$inc)) {
+                updated[field] = (updated[field] || 0) + (value as number);
+              }
+            }
+            
+            // Handle $push operations (array append)
+            if (update.$push) {
+              for (const [field, value] of Object.entries(update.$push)) {
+                if (!updated[field]) updated[field] = [];
+                if (typeof value === 'object' && value !== null && '$each' in value) {
+                  updated[field].push(...(value as any).$each);
+                } else {
+                  updated[field].push(value);
+                }
+              }
+            }
+            
+            // Handle $pull operations (array remove)
+            if (update.$pull) {
+              for (const [field, value] of Object.entries(update.$pull)) {
+                if (Array.isArray(updated[field])) {
+                  if (typeof value === 'object' && value !== null && '$in' in value) {
+                    updated[field] = updated[field].filter((item: any) => 
+                      !(value as any).$in.includes(item)
+                    );
+                  } else {
+                    updated[field] = updated[field].filter((item: any) => item !== value);
+                  }
+                }
+              }
+            }
+            
             data.set(filter._id.toString(), updated);
             return { modifiedCount: 1 };
           }
@@ -168,7 +255,26 @@ vi.mock('../flongo', () => {
               if (docValue > value) return false;
               break;
             case '$in':
-              if (!Array.isArray(value) || !value.includes(docValue)) return false;
+              if (!Array.isArray(value)) return false;
+              // If the document field is an array, check if any element matches
+              if (Array.isArray(docValue)) {
+                if (!docValue.some(item => value.includes(item))) return false;
+              } else {
+                // If the document field is not an array, check direct membership
+                if (!value.includes(docValue)) return false;
+              }
+              break;
+            case '$nin':
+              if (Array.isArray(value) && value.includes(docValue)) return false;
+              break;
+            case '$all':
+              if (!Array.isArray(docValue) || !Array.isArray(value)) return false;
+              if (!value.every(item => docValue.includes(item))) return false;
+              break;
+            case '$elemMatch':
+              // Simple implementation - just check if any array element has the property
+              if (!Array.isArray(docValue)) return false;
+              if (!docValue.some(item => typeof item === 'object' && item !== null)) return false;
               break;
             default:
               // For other operators, just assume match for simplicity
@@ -209,9 +315,9 @@ describe('Integration Tests', () => {
   let collection: FlongoCollection<TestUser>;
   let mockDb: any;
 
-  beforeEach(() => {
-    const { flongoDb } = require('../flongo');
-    mockDb = flongoDb;
+  beforeEach(async () => {
+    const flongoModule = await import('../flongo');
+    mockDb = flongoModule.flongoDb;
     mockDb._testReset();
     
     collection = new FlongoCollection<TestUser>('users');
@@ -290,7 +396,7 @@ describe('Integration Tests', () => {
           .and('age').gt(25)
       );
 
-      expect(activeAdults).toHaveLength(2); // John (30) and Bob (35, but inactive)
+      expect(activeAdults).toHaveLength(1); // Only John (30) - Bob is inactive, Jane is 25 (not > 25)
       activeAdults.forEach(user => {
         expect(user.isActive).toBe(true);
         expect(user.age).toBeGreaterThan(25);
@@ -456,8 +562,9 @@ describe('Integration Tests', () => {
       expect(mockDb.collection).toHaveBeenCalledWith('audit_logs');
     });
 
-    it('should initialize flongo properly', () => {
-      const { initializeFlongo } = require('../flongo');
+    it('should initialize flongo properly', async () => {
+      const flongoModule = await import('../flongo');
+      const { initializeFlongo } = flongoModule;
       
       const config = {
         connectionString: 'mongodb://localhost:27017',
