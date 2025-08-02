@@ -6,10 +6,15 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
+    "build:watch": "tsc --watch",
     "dev": "tsc --watch",
     "test": "vitest",
     "test:watch": "vitest --watch",
-    "prepublishOnly": "npm run build"
+    "test:coverage": "vitest --coverage",
+    "lint": "echo 'Linting not configured yet'",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build && npm test",
+    "semantic-release": "semantic-release"
   },
   "keywords": [
     "mongodb",
@@ -28,22 +33,27 @@
   "devDependencies": {
     "typescript": "^5.0.0",
     "vitest": "^1.0.0",
-    "@types/node": "^20.0.0"
+    "@types/node": "^20.0.0",
+    "semantic-release": "^22.0.0",
+    "@semantic-release/changelog": "^6.0.0",
+    "@semantic-release/git": "^10.0.0"
   },
   "peerDependencies": {
     "mongodb": ">=5.0.0"
   },
   "files": [
-    "dist/**/*",
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "!dist/**/__tests__/**",
     "README.md",
     "LICENSE"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/YOUR_USERNAME/flongo.git"
+    "url": "https://github.com/nickrunner/flongo.git"
   },
   "bugs": {
-    "url": "https://github.com/YOUR_USERNAME/flongo/issues"
+    "url": "https://github.com/nickrunner/flongo/issues"
   },
-  "homepage": "https://github.com/YOUR_USERNAME/flongo#readme"
+  "homepage": "https://github.com/nickrunner/flongo#readme"
 }

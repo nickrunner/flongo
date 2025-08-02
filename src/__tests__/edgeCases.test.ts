@@ -93,7 +93,7 @@ describe('Edge Cases and Error Scenarios', () => {
     it('should handle numeric string ObjectIds', () => {
       const built = query.where('_id').eq('123456789012345678901234').build();
       
-      expect(built._id.toString()).toBe('123456789012345678901234');
+      expect(built._id?.toString()).toBe('123456789012345678901234');
     });
 
     it('should handle geospatial queries with extreme coordinates', () => {
