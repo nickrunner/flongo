@@ -1,3 +1,10 @@
+## [1.0.1](https://github.com/nickrunner/flongo/compare/v1.0.0...v1.0.1) (2025-08-03)
+
+
+### Bug Fixes
+
+* loosening type restricitons on generic type for log event ([d000b1f](https://github.com/nickrunner/flongo/commit/d000b1fc1421b661ed7f26ff49e151c781692a36))
+
 # 1.0.0 (2025-08-02)
 
 
