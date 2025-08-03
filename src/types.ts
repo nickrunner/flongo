@@ -36,7 +36,7 @@ export interface Bounds {
 // Event system types - making these generic for flongo
 export enum EventName {
   CreateEntity = "create_entity",
-  BatchCreateEntities = "batch_create_entities", 
+  BatchCreateEntities = "batch_create_entities",
   UpdateEntity = "update_entity",
   BatchUpdateEntities = "batch_update_entities",
   DeleteEntity = "delete_entity",
@@ -46,7 +46,7 @@ export enum EventName {
 export type Event<T> = {
   name: T;
   identity?: string;
-  value: any; // Generic value for now
+  value?: any; // Generic value for now
 };
 
 export type EventRecord<T extends EventName = any> = DbRecord<Event<T>>;
