@@ -43,7 +43,7 @@ export enum EventName {
   BatchDeleteEntities = "batch_delete_entities"
 }
 
-export type Event<T extends EventName = any> = {
+export type Event<T> = {
   name: T;
   identity?: string;
   value: any; // Generic value for now

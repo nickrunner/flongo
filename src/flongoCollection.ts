@@ -115,7 +115,8 @@ export class FlongoCollection<T> {
    */
   async getAll(query?: FlongoQuery, pagination?: Pagination): Promise<(Entity & T)[]> {
     const mongodbQuery: Filter<Entity & T> = query?.build() ?? {};
-    const mongodbOptions: FindOptions<Entity & T> = query?.buildOptions(pagination) ?? (new FlongoQuery()).buildOptions(pagination);
+    const mongodbOptions: FindOptions<Entity & T> =
+      query?.buildOptions(pagination) ?? new FlongoQuery().buildOptions(pagination);
 
     try {
       const res = await this.collection.find(mongodbQuery, mongodbOptions).toArray();
@@ -457,7 +458,7 @@ export class FlongoCollection<T> {
    * @param event - Event object with name and metadata
    * @returns Promise resolving to the event ID (or null if logging disabled)
    */
-  async logEvent<T extends EventName>(event: Event<T>): Promise<string | null> {
+  async logEvent<T>(event: Event<T>): Promise<string | null> {
     if (!this.events) {
       return null; // Event logging is disabled
     }
@@ -467,7 +468,7 @@ export class FlongoCollection<T> {
       ...event,
       createdAt: Date.now(),
       updatedAt: Date.now()
-    } as OptionalUnlessRequiredId<EventRecord<T>>);
+    } as OptionalUnlessRequiredId<EventRecord>);
 
     return String(created.insertedId);
   }
