@@ -1,6 +1,6 @@
 {
   "name": "flongo",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Firestore-like fluent query API for MongoDB",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

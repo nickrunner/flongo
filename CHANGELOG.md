@@ -1,3 +1,10 @@
+## [1.0.2](https://github.com/nickrunner/flongo/compare/v1.0.1...v1.0.2) (2025-08-03)
+
+
+### Bug Fixes
+
+* optional event value ([9b16ca9](https://github.com/nickrunner/flongo/commit/9b16ca9a206ff69892dd814efdcd09a78676daea))
+
 ## [1.0.1](https://github.com/nickrunner/flongo/compare/v1.0.0...v1.0.1) (2025-08-03)
 
 
