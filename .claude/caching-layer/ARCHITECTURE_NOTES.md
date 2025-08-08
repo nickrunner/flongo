@@ -1,0 +1,81 @@
+# Caching Layer Architecture for Flongo
+
+## Overview
+The caching layer provides a transparent, high-performance cache for MongoDB operations in Flongo. It's designed as a drop-in replacement for FlongoCollection with zero breaking changes.
+
+## Architecture Decisions
+
+### 1. Cache Store Abstraction
+- **Interface-based design**: Allows swapping cache providers (memory, Redis, Memcached)
+- **In-memory default**: Ships with built-in memory cache, no external dependencies
+- **Pluggable providers**: Users can implement custom cache stores
+
+### 2. Cache Key Generation
+- **Deterministic keys**: Generated from FlongoQuery objects including all parameters
+- **Query normalization**: Ensures equivalent queries generate same keys
+- **Collection namespacing**: Prevents key collisions across collections
+
+### 3. Cache Invalidation Strategy
+- **Smart invalidation**: Only clears affected queries on mutations
+- **Write-through**: Updates cache simultaneously with database writes
+- **TTL-based expiry**: Configurable time-to-live per collection
+- **LRU eviction**: Memory-bounded with least-recently-used eviction
+
+### 4. API Compatibility
+- **CachedFlongoCollection**: Extends FlongoCollection, maintains full API
+- **Transparent operation**: No code changes required for consumers
+- **Configuration-driven**: Enable/disable caching via constructor options
+- **Backward compatible**: Existing code works without modifications
+
+### 5. Performance Considerations
+- **Sub-millisecond cache ops**: Memory cache provides <1ms response
+- **Lazy invalidation**: Defers cleanup until necessary
+- **Batch optimization**: Groups cache updates for batch operations
+- **Configurable limits**: Memory usage caps, entry limits, TTL settings
+
+## Implementation Phases
+
+### Phase 1: Core Cache Infrastructure
+- Cache store interface and memory implementation
+- Key generation and serialization
+- Basic get/set/delete operations
+- Configuration system
+
+### Phase 2: Read-Through Caching
+- CachedFlongoCollection wrapper class
+- Query result caching for all read methods
+- Cache warmup and preloading
+- Statistics and monitoring
+
+### Phase 3: Write-Through & Invalidation
+- Mutation cache updates
+- Smart query invalidation
+- Consistency guarantees
+- Management APIs and debugging tools
+
+## Configuration Example
+```typescript
+const collection = new CachedFlongoCollection<User>('users', {
+  enableCaching: true,
+  cacheConfig: {
+    maxEntries: 10000,
+    ttlSeconds: 300,
+    provider: 'memory', // or custom provider
+    enableStats: true
+  }
+});
+```
+
+## Key Benefits
+1. **10-100x performance improvement** for cached queries
+2. **Zero code changes** for existing Flongo users
+3. **Configurable and flexible** per collection needs
+4. **Production-ready** with monitoring and debugging
+5. **Extensible** for custom cache providers
+
+## Testing Strategy
+- Unit tests for each cache component
+- Integration tests with MongoDB operations
+- Performance benchmarks comparing cached vs uncached
+- Edge case coverage (concurrent updates, invalidation races)
+- Backward compatibility verification
