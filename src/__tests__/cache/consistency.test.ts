@@ -88,7 +88,7 @@ describe('CacheManager - Consistency Verification', () => {
     it('should detect inconsistencies when cache differs from database', async () => {
       // Setup cached documents (outdated)
       const cachedDoc = { _id: '1', name: 'Old Name', createdAt: 1000, updatedAt: 1000 };
-      await cacheStore.set(`${collectionName}:get:{"id":"1"}`, cachedDoc);
+      await cacheStore.set(`flongo:${collectionName}:get:1`, cachedDoc);
       
       // Mock fetch function that returns updated data
       const freshDoc = { _id: '1', name: 'New Name', createdAt: 1000, updatedAt: 2000 };
@@ -104,7 +104,7 @@ describe('CacheManager - Consistency Verification', () => {
       // Setup many cached documents
       for (let i = 1; i <= 20; i++) {
         await cacheStore.set(
-          `${collectionName}:get:{"id":"${i}"}`,
+          `flongo:${collectionName}:get:${i}`,
           { _id: String(i), name: `User ${i}` }
         );
       }
@@ -122,7 +122,7 @@ describe('CacheManager - Consistency Verification', () => {
     
     it('should handle fetch errors gracefully', async () => {
       const cachedDoc = { _id: '1', name: 'User 1' };
-      await cacheStore.set(`${collectionName}:get:{"id":"1"}`, cachedDoc);
+      await cacheStore.set(`flongo:${collectionName}:get:1`, cachedDoc);
       
       const fetchFn = vi.fn(async () => {
         throw new Error('Database connection failed');
@@ -320,7 +320,7 @@ describe('CacheManager - Consistency Verification', () => {
         array: [1, 2, 3]
       };
       
-      await cacheStore.set(`flongo:${collectionName}:get:{"id":"1"}`, cached);
+      await cacheStore.set(`flongo:${collectionName}:get:1`, cached);
       
       const fresh = {
         _id: '1',

@@ -64,16 +64,23 @@ export class InvalidationStrategy {
   }
 
   /**
-   * Invalidate caches when a document is deleted
+   * Invalidate a specific document from cache
    */
-  async invalidateOnDelete(id: string): Promise<void> {
-    // Clear the specific document cache (need to generate exact key since it's hashed)
+  async invalidateDocument(id: string): Promise<void> {
     const getKey = CacheKeyGenerator.generate({
       collection: this.collectionName,
       operation: 'get',
       id
     });
     await this.cacheStore.delete(getKey);
+  }
+
+  /**
+   * Invalidate caches when a document is deleted
+   */
+  async invalidateOnDelete(id: string): Promise<void> {
+    // Clear the specific document cache
+    await this.invalidateDocument(id);
     
     // Clear all count queries (count has changed)
     await this.invalidatePattern('count*');
@@ -172,12 +179,37 @@ export class InvalidationStrategy {
   }
 
   /**
-   * Convert a glob-like pattern to regex
+   * Convert a glob-like pattern to regex with validation
    */
   private patternToRegex(pattern: string): RegExp {
+    // Validate pattern length to prevent ReDoS
+    if (pattern.length > 1000) {
+      throw new Error('Pattern too long - maximum length is 1000 characters');
+    }
+    
+    // Check for dangerous patterns that could cause ReDoS
+    const dangerousPatterns = [
+      /(\*\+){2,}/,  // Multiple nested quantifiers
+      /(\.\*){10,}/, // Excessive wildcards
+      /(\[.*\]){10,}/, // Excessive character classes
+    ];
+    
+    for (const dangerous of dangerousPatterns) {
+      if (dangerous.test(pattern)) {
+        throw new Error('Pattern contains potentially dangerous regex constructs');
+      }
+    }
+    
+    // Escape special characters except *
     const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Convert * to .* for glob-like matching
     const regex = escaped.replace(/\\\*/g, '.*');
-    return new RegExp(`^${regex}$`);
+    
+    try {
+      return new RegExp(`^${regex}$`);
+    } catch (error) {
+      throw new Error(`Invalid pattern: ${pattern}`);
+    }
   }
 
   /**

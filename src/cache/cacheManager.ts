@@ -1,6 +1,7 @@
 import { CacheStore } from "./cacheStore";
 import { CacheStatsCollector } from "./cacheStats";
 import { InvalidationStrategy } from "./invalidationStrategy";
+import { CacheKeyGenerator } from "./cacheKeyGenerator";
 import { FlongoQuery } from "../flongoQuery";
 import { Entity } from "../types";
 
@@ -126,11 +127,13 @@ export class CacheManager {
     const sampled = this.sampleArray(documentKeys, Math.min(sampleSize, documentKeys.length));
     
     for (const key of sampled) {
-      // Extract ID from cache key
-      const idMatch = key.match(/:get:.*id["\s]*:["\s]*["']([^"']+)["']/);
-      if (!idMatch) continue;
+      // Extract ID from cache key using structured parsing
+      const parsed = CacheKeyGenerator.parseKey(key);
       
-      const id = idMatch[1];
+      // We're looking for 'get' operations with an ID
+      if (parsed.operation !== 'get' || !parsed.identifier) continue;
+      
+      const id = parsed.identifier;
       
       try {
         // Get cached version

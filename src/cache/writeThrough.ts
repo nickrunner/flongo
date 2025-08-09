@@ -17,6 +17,15 @@ export interface AtomicOperationData {
 }
 
 /**
+ * Options for write-through cache
+ */
+export interface WriteThroughOptions {
+  optimisticUpdates?: boolean;
+  batchSize?: number;
+  retryOnFailure?: boolean;
+}
+
+/**
  * Handles write-through caching operations
  * Updates cache simultaneously with database writes
  */
@@ -180,17 +189,22 @@ export class WriteThrough<T> {
       operation: 'get',
       id
     });
-    const cached = await this.cacheStore.get(cacheKey);
+    const original = await this.cacheStore.get(cacheKey);
     
-    if (!cached) {
+    if (!original) {
       return null;
     }
     
-    // Apply the update optimistically
-    const updated = updateFn(cached as Entity & T);
-    await this.cacheStore.set(cacheKey, updated);
-    
-    return updated;
+    try {
+      // Apply the update optimistically
+      const updated = updateFn(original as Entity & T);
+      await this.cacheStore.set(cacheKey, updated);
+      return updated;
+    } catch (error) {
+      // If update function fails, ensure cache remains unchanged
+      await this.cacheStore.set(cacheKey, original);
+      throw error;
+    }
   }
 
   /**
@@ -203,5 +217,44 @@ export class WriteThrough<T> {
       id
     });
     await this.cacheStore.set(cacheKey, original);
+  }
+
+  /**
+   * Execute optimistic update with proper error handling and rollback
+   */
+  async executeOptimisticUpdate(
+    id: string,
+    updateFn: (doc: Entity & T) => Entity & T,
+    databaseUpdateFn: () => Promise<void>
+  ): Promise<Entity & T | null> {
+    const cacheKey = CacheKeyGenerator.generate({
+      collection: this.collectionName,
+      operation: 'get',
+      id
+    });
+    
+    const original = await this.cacheStore.get(cacheKey);
+    if (!original) {
+      return null;
+    }
+    
+    let updated: Entity & T | null = null;
+    
+    try {
+      // Apply optimistic update to cache
+      updated = updateFn(original as Entity & T);
+      await this.cacheStore.set(cacheKey, updated);
+      
+      // Execute database update
+      await databaseUpdateFn();
+      
+      return updated;
+    } catch (error) {
+      // Rollback on database error
+      if (original) {
+        await this.rollbackOptimisticUpdate(id, original as Entity & T);
+      }
+      throw error;
+    }
   }
 }

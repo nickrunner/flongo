@@ -17,7 +17,7 @@ export {
 } from './cacheKeyGenerator';
 
 export { 
-  InvalidationStrategy,
+  InvalidationStrategy as CacheInvalidationStrategy,
   InvalidationRule,
   InvalidationOptions,
   CacheInvalidator,
@@ -43,3 +43,18 @@ export {
   getGlobalCacheMonitor,
   resetGlobalCacheMonitor
 } from './cacheStats';
+
+export {
+  InvalidationStrategy
+} from './invalidationStrategy';
+
+export {
+  WriteThrough,
+  WriteThroughOptions
+} from './writeThrough';
+
+export {
+  CacheManager,
+  CacheDebugInfo,
+  ConsistencyCheckResult
+} from './cacheManager';

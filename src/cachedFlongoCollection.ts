@@ -282,8 +282,13 @@ export class CachedFlongoCollection<T> extends FlongoCollection<T> {
     await super.batchCreate(attributes, clientId);
     
     if (this.shouldUseCache('write')) {
-      // Invalidate all cached queries for this collection
-      await this.invalidationStrategy.invalidateCollection();
+      // Optimized invalidation: only invalidate queries that would be affected
+      // by new documents (count, getAll without specific filters)
+      await Promise.all([
+        this.invalidationStrategy.invalidatePattern(`${this.collectionName}:count:*`),
+        this.invalidationStrategy.invalidatePattern(`${this.collectionName}:getAll:*`),
+        this.invalidationStrategy.invalidatePattern(`${this.collectionName}:getSome:*`)
+      ]);
     }
   }
 
@@ -332,8 +337,20 @@ export class CachedFlongoCollection<T> extends FlongoCollection<T> {
     await super.batchDelete(ids, clientId);
     
     if (this.shouldUseCache('write')) {
-      // Invalidate all affected items
-      await this.invalidationStrategy.invalidateOnBulkDelete(ids);
+      // Optimized batch invalidation
+      const invalidations: Promise<void>[] = [];
+      
+      // Invalidate individual documents
+      for (const id of ids) {
+        invalidations.push(this.invalidationStrategy.invalidateDocument(id));
+      }
+      
+      // Invalidate count and list queries once
+      invalidations.push(this.invalidationStrategy.invalidatePattern(`${this.collectionName}:count:*`));
+      invalidations.push(this.invalidationStrategy.invalidatePattern(`${this.collectionName}:getAll:*`));
+      invalidations.push(this.invalidationStrategy.invalidatePattern(`${this.collectionName}:getSome:*`));
+      
+      await Promise.all(invalidations);
     }
   }
 
