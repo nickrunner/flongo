@@ -4,55 +4,58 @@ You are a **Solver Agent** in a multi-agent feature development system. Your rol
 
 ## Task Context
 
-- **Issue Number**: 3
+- **Issue Number**: 4
 - **Feature Name**: caching-layer
 - **Attempt Number**: 1 of 3
-- **Agent ID**: solver-solver-1754706154594
+- **Agent ID**: solver-solver-1754706154545
 
-- **Issue Details**: #3: caching-layer - Step 2: CachedFlongoCollection Implementation with Read-Through Caching
+- **Issue Details**: #4: caching-layer - Step 3: Write-Through Cache and Invalidation System
 
 ## Overview
 Part of feature: caching-layer
 
 ## Task Description
-Create the CachedFlongoCollection class that extends or wraps FlongoCollection to provide transparent caching for all read operations. This implementation will serve as a drop-in replacement for FlongoCollection, intercepting read operations to check cache before querying MongoDB, and updating cache with fetched results. This task includes implementing cache warmup, query result caching, and intelligent cache key generation from FlongoQuery objects.
+Implement write-through caching and intelligent cache invalidation for all write operations (create, update, delete). This task completes the caching layer by ensuring cache consistency during mutations, implementing smart invalidation strategies that clear affected cached queries, and providing manual cache management APIs. The implementation must handle complex scenarios like batch operations, atomic updates, and maintain data consistency between cache and database.
 
 ## Acceptance Criteria
-- [ ] Create CachedFlongoCollection that maintains full API compatibility with FlongoCollection
-- [ ] Implement read-through caching for get(), getAll(), getSome(), getFirst(), count(), and exists() methods
-- [ ] Build intelligent cache key generation from FlongoQuery objects including all query parameters
-- [ ] Support configurable cache behavior per collection (enable/disable, TTL, max entries)
-- [ ] Implement query result normalization for consistent caching
-- [ ] Add cache warmup capabilities for frequently accessed data
-- [ ] Support partial cache invalidation based on query patterns
-- [ ] Maintain event logging compatibility when caching is enabled
-- [ ] Implement cache bypass mechanism for specific queries
-- [ ] Add cache-aware pagination support
+- [ ] Implement write-through caching for create(), batchCreate() operations
+- [ ] Add cache invalidation for update(), updateAll(), updateFirst() operations
+- [ ] Implement cache clearing for delete(), batchDelete() operations
+- [ ] Build intelligent query invalidation that identifies affected cached queries
+- [ ] Support atomic operations (increment, decrement, append, arrRemove) with cache updates
+- [ ] Create manual cache management API (clear, refresh, preload)
+- [ ] Implement cache consistency verification mechanisms
+- [ ] Add cache invalidation hooks for custom logic
+- [ ] Support transaction-aware caching (cache updates only on commit)
+- [ ] Build cache debugging and inspection tools
 
 ## Technical Requirements
-- [ ] All existing FlongoCollection tests pass with CachedFlongoCollection
-- [ ] Zero breaking changes to existing API
-- [ ] Cache operations are transparent to consumers
-- [ ] Query results are properly serialized/deserialized
-- [ ] ObjectId conversion is handled correctly in cached results
-- [ ] Timestamps (createdAt, updatedAt) remain accurate
-- [ ] Cache coherence is maintained across operations
-- [ ] Performance improvement of at least 10x for cache hits
-- [ ] Memory overhead is predictable and bounded
+- [ ] Write operations maintain cache consistency
+- [ ] No stale data served after mutations
+- [ ] Invalidation is precise (only affected queries cleared)
+- [ ] Batch operations are optimized (single cache update)
+- [ ] Atomic operations update cache without full invalidation
+- [ ] Cache updates are atomic with database writes
+- [ ] Error handling ensures cache doesn't diverge from database
+- [ ] Performance overhead for writes is minimal (<10%)
+- [ ] Support for optimistic and pessimistic cache updates
+- [ ] Comprehensive test coverage for all edge cases
 
 ## Dependencies
-Depends on #2 (Core Cache Implementation)
+Depends on #2 (Core Cache Implementation) and #3 (Read-Through Caching)
 
 ## Files Likely to Change
-- `src/cachedFlongoCollection.ts` (new)
-- `src/cache/queryCache.ts` (new)
-- `src/cache/cacheInterceptor.ts` (new)
-- `src/cache/cacheWarmup.ts` (new)
-- `src/flongoCollection.ts` (potential refactoring for extensibility)
-- `src/__tests__/cachedFlongoCollection.test.ts` (new)
-- `src/__tests__/integration/cachingIntegration.test.ts` (new)
-- `src/index.ts` (export CachedFlongoCollection)
-- `README.md` (usage documentation)
+- `src/cachedFlongoCollection.ts` (add write operations)
+- `src/cache/invalidationStrategy.ts` (new)
+- `src/cache/writeThrough.ts` (new)
+- `src/cache/cacheManager.ts` (new)
+- `src/cache/cacheConsistency.ts` (new)
+- `src/cache/cacheDebugger.ts` (new)
+- `src/__tests__/cache/invalidation.test.ts` (new)
+- `src/__tests__/cache/writeThrough.test.ts` (new)
+- `src/__tests__/cache/consistency.test.ts` (new)
+- `src/__tests__/edgeCases.test.ts` (update for cache scenarios)
+- `examples/caching.ts` (new usage examples)
 
 ## Reviewers Required
 **This issue requires**: backend
@@ -129,7 +132,7 @@ Feature Branch: feature/caching-layer
     Update the changelog with a BRIEF entry of what you changed
     IMPORTANT: remember to be brief and concise
     ```bash
-    echo "### Issue #3 - $(date +%Y-%m-%d)
+    echo "### Issue #4 - $(date +%Y-%m-%d)
     - [Brief description of what was implemented]
     " >> .codettea/caching-layer/CHANGELOG.md
     ```

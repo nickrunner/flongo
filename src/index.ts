@@ -1,6 +1,7 @@
 // Main exports for flongo package
 
 export { FlongoCollection, FlongoCollectionOptions } from "./flongoCollection";
+export { CachedFlongoCollection, CachedFlongoCollectionOptions } from "./cachedFlongoCollection";
 export { FlongoQuery, FlongoQueryBuilder } from "./flongoQuery";
 export { initializeFlongo, FlongoConfig, flongoClient, flongoDb } from "./flongo";
 export { Error404, Error400 } from "./errors";
