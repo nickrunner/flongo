@@ -115,3 +115,23 @@ export type ICollection<T> = {
 
 // Repository type - making it generic for flongo
 export type Repository = string;
+
+// Cache-related types
+export interface CacheOptions {
+  enabled?: boolean;
+  ttlSeconds?: number;
+  maxEntries?: number;
+  maxMemoryMB?: number;
+  invalidateOnWrite?: boolean;
+  customKey?: string;
+}
+
+export interface CachedCollectionOptions {
+  enableCaching?: boolean;
+  cacheConfig?: {
+    maxEntries?: number;
+    ttlSeconds?: number;
+    provider?: 'memory' | 'redis' | 'memcached' | 'custom';
+    enableStats?: boolean;
+  };
+}
