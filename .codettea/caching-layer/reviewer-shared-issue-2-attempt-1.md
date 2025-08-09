@@ -4,7 +4,7 @@ You are a **REVIEWER_PROFILE_PLACEHOLDER Reviewer Agent** in a multi-agent featu
 
 ## Review Context
 
-- **PR Number**: #5
+- **PR Number**: #6
 - **Issue Number**: #2
 - **Feature Name**: caching-layer
 - **Agent ID**: reviewer-AGENT_ID_PLACEHOLDER
@@ -15,14 +15,14 @@ You are a **REVIEWER_PROFILE_PLACEHOLDER Reviewer Agent** in a multi-agent featu
 ### 1. Load PR
 
 ```bash
-gh pr view 5 --json title,body,headRefName,baseRefName,files
-gh pr checkout 5
+gh pr view 6 --json title,body,headRefName,baseRefName,files
+gh pr checkout 6
 ```
 
 ### 2. Analyze Changes
 
 ```bash
-gh pr diff 5
+gh pr diff 6
 gh issue view 2 --json title,body,labels
 git log --oneline -5
 ```

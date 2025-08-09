@@ -1,9 +1,17 @@
 import { InvalidationStrategy } from './cacheStrategies';
+import { ICollectionQuery, Pagination } from '../types';
+
+export interface WarmupQuery {
+  collection: string;
+  operation: string;
+  query?: ICollectionQuery;
+  pagination?: Pagination;
+}
 
 export interface CacheProviderConfig {
   type: 'memory' | 'redis' | 'memcached' | 'custom';
   connectionString?: string;
-  options?: Record<string, any>;
+  options?: Record<string, unknown>;
 }
 
 export interface CacheConfig {
@@ -16,12 +24,7 @@ export interface CacheConfig {
   enableStats: boolean;
   invalidationStrategy: InvalidationStrategy;
   customTTLs?: Record<string, number>;
-  warmupQueries?: Array<{
-    collection: string;
-    operation: string;
-    query?: any;
-    pagination?: any;
-  }>;
+  warmupQueries?: WarmupQuery[];
   debug?: boolean;
 }
 
@@ -82,7 +85,7 @@ export class CacheConfiguration {
     return this.config.provider.type;
   }
   
-  get providerOptions(): Record<string, any> | undefined {
+  get providerOptions(): Record<string, unknown> | undefined {
     return this.config.provider.options;
   }
   
@@ -118,7 +121,7 @@ export class CacheConfiguration {
     return this.config.customTTLs;
   }
   
-  get warmupQueries(): Array<any> | undefined {
+  get warmupQueries(): WarmupQuery[] | undefined {
     return this.config.warmupQueries;
   }
   
@@ -173,7 +176,7 @@ export class CacheConfiguration {
     this.config.customTTLs[pattern] = ttl;
   }
   
-  addWarmupQuery(query: any): void {
+  addWarmupQuery(query: WarmupQuery): void {
     if (!this.config.warmupQueries) {
       this.config.warmupQueries = [];
     }
@@ -197,7 +200,7 @@ export class CacheConfiguration {
     
     if (process.env.FLONGO_CACHE_PROVIDER) {
       config.provider = {
-        type: process.env.FLONGO_CACHE_PROVIDER as any
+        type: process.env.FLONGO_CACHE_PROVIDER as 'memory' | 'redis' | 'memcached' | 'custom'
       };
     }
     

@@ -1,4 +1,4 @@
-export interface CacheEntry<T = any> {
+export interface CacheEntry<T> {
   value: T;
   ttl?: number;
   createdAt: number;
@@ -17,7 +17,7 @@ export interface CacheStats {
   memoryUsage?: number;
 }
 
-export interface CacheStore<T = any> {
+export interface CacheStore<T> {
   get(key: string): Promise<T | undefined>;
   
   set(key: string, value: T, ttlSeconds?: number): Promise<void>;
@@ -41,10 +41,10 @@ export interface CacheStoreOptions {
   maxEntries?: number;
   defaultTTL?: number;
   enableStats?: boolean;
-  onEviction?: (key: string, value: any) => void;
+  onEviction?: <T>(key: string, value: T) => void;
 }
 
-export abstract class BaseCacheStore<T = any> implements CacheStore<T> {
+export abstract class BaseCacheStore<T> implements CacheStore<T> {
   protected stats: CacheStats = {
     hits: 0,
     misses: 0,

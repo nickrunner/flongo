@@ -1,13 +1,45 @@
 import { createHash } from 'crypto';
 import { ICollectionQuery, Pagination, SortDirection } from '../types';
 
+// Type definitions for normalized values
+interface NormalizedObject {
+  [key: string]: NormalizedValue;
+}
+
+type NormalizedValue = 
+  | string 
+  | number 
+  | boolean 
+  | null
+  | NormalizedValue[]
+  | NormalizedObject;
+
+interface NormalizedQuery {
+  expressions?: Array<{
+    op: string;
+    key: string;
+    val: NormalizedValue;
+  }>;
+  ranges?: Array<{
+    key: string;
+    start: NormalizedValue;
+    end: NormalizedValue;
+  }>;
+  order?: {
+    field: string;
+    direction: SortDirection;
+  };
+  or?: NormalizedQuery[];
+  and?: NormalizedQuery[];
+}
+
 export interface CacheKeyOptions {
   collection: string;
   operation: string;
   query?: ICollectionQuery;
   id?: string;
   pagination?: Pagination;
-  additionalParams?: Record<string, any>;
+  additionalParams?: Record<string, unknown>;
 }
 
 export class CacheKeyGenerator {
@@ -59,8 +91,8 @@ export class CacheKeyGenerator {
     return this.hash(JSON.stringify(normalized));
   }
   
-  private static normalizeQuery(query: ICollectionQuery): any {
-    const normalized: any = {};
+  private static normalizeQuery(query: ICollectionQuery): NormalizedQuery {
+    const normalized: NormalizedQuery = {};
     
     if (query.expressions && query.expressions.length > 0) {
       normalized.expressions = query.expressions
@@ -110,7 +142,7 @@ export class CacheKeyGenerator {
     return normalized;
   }
   
-  private static normalizeValue(value: any): any {
+  private static normalizeValue(value: unknown): NormalizedValue {
     if (value === null) {
       return this.NULL_VALUE;
     }
@@ -128,20 +160,20 @@ export class CacheKeyGenerator {
         return value.map(v => this.normalizeValue(v)).sort();
       }
       
-      const normalized: any = {};
-      const keys = Object.keys(value).sort();
+      const normalized: NormalizedObject = {};
+      const keys = Object.keys(value as Record<string, unknown>).sort();
       
       for (const key of keys) {
-        normalized[key] = this.normalizeValue(value[key]);
+        normalized[key] = this.normalizeValue((value as Record<string, unknown>)[key]);
       }
       
       return normalized;
     }
     
-    return value;
+    return value as NormalizedValue;
   }
   
-  private static hashObject(obj: Record<string, any>): string {
+  private static hashObject(obj: Record<string, unknown>): string {
     const normalized = this.normalizeValue(obj);
     return this.hash(JSON.stringify(normalized));
   }

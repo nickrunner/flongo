@@ -17,19 +17,19 @@ export interface InvalidationRule {
   dependencies?: string[];
 }
 
-export interface InvalidationOptions {
+export interface InvalidationOptions<T = unknown> {
   collection: string;
   operation: 'create' | 'update' | 'delete' | 'batchCreate' | 'batchUpdate' | 'batchDelete';
   ids?: string[];
   query?: ICollectionQuery;
-  data?: any;
+  data?: T;
 }
 
-export class CacheInvalidator {
+export class CacheInvalidator<T = unknown> {
   private rules: Map<string, InvalidationRule[]>;
   private dependencies: Map<string, Set<string>>;
   
-  constructor(private cache: CacheStore) {
+  constructor(private cache: CacheStore<T>) {
     this.rules = new Map();
     this.dependencies = new Map();
   }
@@ -48,7 +48,7 @@ export class CacheInvalidator {
     }
   }
   
-  async invalidate(options: InvalidationOptions): Promise<void> {
+  async invalidate(options: InvalidationOptions<T>): Promise<void> {
     const affectedKeys = await this.findAffectedKeys(options);
     
     for (const key of affectedKeys) {
@@ -79,7 +79,7 @@ export class CacheInvalidator {
     await this.invalidatePattern(pattern);
   }
   
-  async smartInvalidate(options: InvalidationOptions): Promise<void> {
+  async smartInvalidate(options: InvalidationOptions<T>): Promise<void> {
     switch (options.operation) {
       case 'create':
       case 'batchCreate':
@@ -114,7 +114,7 @@ export class CacheInvalidator {
     }
   }
   
-  private async findAffectedKeys(options: InvalidationOptions): Promise<string[]> {
+  private async findAffectedKeys(options: InvalidationOptions<T>): Promise<string[]> {
     const keys = await this.cache.keys();
     const affected: string[] = [];
     
@@ -127,7 +127,7 @@ export class CacheInvalidator {
     return affected;
   }
   
-  private isKeyAffected(key: string, options: InvalidationOptions): boolean {
+  private isKeyAffected(key: string, options: InvalidationOptions<T>): boolean {
     if (!CacheKeyGenerator.isFlongoKey(key)) {
       return false;
     }
@@ -194,7 +194,7 @@ export class CacheInvalidator {
     await this.invalidateOperation(collection, 'exists');
   }
   
-  private async invalidateRelatedQueries(options: InvalidationOptions): Promise<void> {
+  private async invalidateRelatedQueries(options: InvalidationOptions<T>): Promise<void> {
     if (!options.data) {
       // If no data provided, invalidate all list queries for safety
       await this.invalidateListQueries(options.collection);
@@ -218,7 +218,7 @@ export class CacheInvalidator {
     }
   }
   
-  private async invalidateDependencies(options: InvalidationOptions): Promise<void> {
+  private async invalidateDependencies(options: InvalidationOptions<T>): Promise<void> {
     const pattern = `${options.collection}:*`;
     const dependentPatterns = this.dependencies.get(pattern) || new Set();
     

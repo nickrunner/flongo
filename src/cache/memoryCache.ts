@@ -5,12 +5,13 @@ export interface MemoryCacheOptions extends CacheStoreOptions {
   maxMemoryMB?: number;
 }
 
-export class MemoryCache<T = any> extends BaseCacheStore<T> {
+export class MemoryCache<T> extends BaseCacheStore<T> {
   private cache: Map<string, CacheEntry<T>>;
   private lruOrder: string[];
   private cleanupInterval?: NodeJS.Timeout;
   private readonly memoryOptions: Required<MemoryCacheOptions>;
   private readonly locks: Map<string, Promise<void>>;
+  private capacityLock: Promise<void> | null = null;
   
   constructor(options: MemoryCacheOptions = {}) {
     super(options);
@@ -53,6 +54,21 @@ export class MemoryCache<T = any> extends BaseCacheStore<T> {
   }
   
   async set(key: string, value: T, ttlSeconds?: number): Promise<void> {
+    // Acquire capacity lock for eviction check
+    await this.waitForCapacityLock();
+    const capacityLock = this.acquireCapacityLock();
+    
+    try {
+      await capacityLock;
+      
+      // Check and ensure capacity with global lock
+      await this.checkMemoryLimit();
+      await this.ensureCapacity();
+    } finally {
+      this.releaseCapacityLock();
+    }
+    
+    // Now acquire key-specific lock for the actual set
     const lock = this.acquireLock(key);
     
     try {
@@ -60,8 +76,6 @@ export class MemoryCache<T = any> extends BaseCacheStore<T> {
       
       const ttl = ttlSeconds ?? this.options.defaultTTL;
       const now = Date.now();
-      
-      await this.ensureCapacity();
       
       const entry: CacheEntry<T> = {
         value,
@@ -74,8 +88,6 @@ export class MemoryCache<T = any> extends BaseCacheStore<T> {
       this.cache.set(key, entry);
       this.updateLRU(key);
       this.incrementStat('sets');
-      
-      await this.checkMemoryLimit();
     } finally {
       this.releaseLock(key);
     }
@@ -195,20 +207,40 @@ export class MemoryCache<T = any> extends BaseCacheStore<T> {
   }
   
   private async ensureCapacity(): Promise<void> {
-    while (this.cache.size >= this.options.maxEntries && this.lruOrder.length > 0) {
-      const keyToEvict = this.lruOrder[0];
-      await this.delete(keyToEvict);
-      this.incrementStat('evictions');
+    // Need to ensure we have room for one more entry
+    if (this.cache.size >= this.options.maxEntries && this.lruOrder.length > 0) {
+      // Batch evict to make room
+      const entriesToEvict = Math.max(1, this.cache.size - this.options.maxEntries + 1);
+      const keysToEvict = this.lruOrder.slice(0, Math.min(entriesToEvict, this.lruOrder.length));
+      
+      // Batch delete without recursion
+      for (const key of keysToEvict) {
+        const entry = this.cache.get(key);
+        if (entry) {
+          this.cache.delete(key);
+          this.removeLRU(key);
+          this.incrementStat('evictions');
+          this.incrementStat('deletes');
+          if (this.options.onEviction) {
+            this.options.onEviction(key, entry.value);
+          }
+        }
+      }
     }
   }
   
   private async checkMemoryLimit(): Promise<void> {
     const memoryUsageMB = (await this.getMemoryUsage()) / (1024 * 1024);
     
-    while (memoryUsageMB > this.memoryOptions.maxMemoryMB && this.lruOrder.length > 0) {
-      const keyToEvict = this.lruOrder[0];
-      await this.delete(keyToEvict);
-      this.incrementStat('evictions');
+    if (memoryUsageMB > this.memoryOptions.maxMemoryMB && this.lruOrder.length > 0) {
+      // Calculate how many entries to evict (at least 10% of cache or 1 entry)
+      const entriesToEvict = Math.max(1, Math.ceil(this.cache.size * 0.1));
+      const keysToEvict = this.lruOrder.slice(0, Math.min(entriesToEvict, this.lruOrder.length));
+      
+      for (const key of keysToEvict) {
+        await this.delete(key);
+        this.incrementStat('evictions');
+      }
     }
   }
   
@@ -230,8 +262,15 @@ export class MemoryCache<T = any> extends BaseCacheStore<T> {
     } else if (typeof value === 'object') {
       try {
         size += JSON.stringify(value).length * 2;
-      } catch {
-        size += 1024;
+      } catch (error) {
+        // Handle circular references or other JSON errors
+        // Estimate size based on object key count
+        if (error instanceof Error && error.message.includes('circular')) {
+          const keys = Object.keys(value as object).length;
+          size += keys * 50; // Rough estimate: 50 bytes per key
+        } else {
+          size += 1024; // Default fallback
+        }
       }
     }
     
@@ -276,9 +315,12 @@ export class MemoryCache<T = any> extends BaseCacheStore<T> {
     return lock;
   }
   
+  // Simple async lock for Node.js single-threaded environment
+  // Note: Node.js JavaScript execution is single-threaded
   private createLockPromise(): Promise<void> {
     return new Promise(resolve => {
-      setImmediate(resolve);
+      // Use nextTick for immediate execution in next iteration
+      process.nextTick(resolve);
     });
   }
   
@@ -290,6 +332,28 @@ export class MemoryCache<T = any> extends BaseCacheStore<T> {
     const lock = this.locks.get(key);
     if (lock) {
       await lock;
+    }
+  }
+  
+  private acquireCapacityLock(): Promise<void> {
+    if (this.capacityLock) {
+      const newLock = this.capacityLock.then(() => this.createLockPromise());
+      this.capacityLock = newLock;
+      return newLock;
+    }
+    
+    const lock = this.createLockPromise();
+    this.capacityLock = lock;
+    return lock;
+  }
+  
+  private releaseCapacityLock(): void {
+    this.capacityLock = null;
+  }
+  
+  private async waitForCapacityLock(): Promise<void> {
+    if (this.capacityLock) {
+      await this.capacityLock;
     }
   }
 }
