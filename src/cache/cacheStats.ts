@@ -190,7 +190,7 @@ export class CacheStatsCollector {
     return new Map(this.metrics.collectionStats);
   }
   
-  getStats(): CacheMetrics & { requests: number; avgResponseTime: number } {
+  getStats(): CacheMetrics & { hits: number; misses: number; clears: number; requests: number; avgResponseTime: number } {
     const requests = this.metrics.hits + this.metrics.misses;
     const avgResponseTime = this.metrics.responseTimeHistory.length > 0
       ? this.calculateAverage(this.metrics.responseTimeHistory)

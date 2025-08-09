@@ -211,9 +211,9 @@ export class CacheManager {
     clearInterval(interval);
     
     return {
-      avgHitRate: samples.reduce((sum, s) => sum + s.hitRate, 0) / samples.length * 100,
-      avgResponseTime: samples.reduce((sum, s) => sum + s.responseTime, 0) / samples.length,
-      peakMemoryUsage: Math.max(...samples.map(s => s.memoryUsage))
+      avgHitRate: samples.length > 0 ? samples.reduce((sum, s) => sum + s.hitRate, 0) / samples.length * 100 : 0,
+      avgResponseTime: samples.length > 0 ? samples.reduce((sum, s) => sum + s.responseTime, 0) / samples.length : 0,
+      peakMemoryUsage: samples.length > 0 ? Math.max(...samples.map(s => s.memoryUsage)) : 0
     };
   }
 

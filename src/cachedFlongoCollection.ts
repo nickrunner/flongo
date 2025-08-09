@@ -126,7 +126,7 @@ export class CachedFlongoCollection<T> extends FlongoCollection<T> {
     const cacheKey = CacheKeyGenerator.generate({
       collection: this.collectionName,
       operation: 'getAll',
-      query: query?.build(),
+      query: query,
       pagination
     });
     
@@ -155,7 +155,7 @@ export class CachedFlongoCollection<T> extends FlongoCollection<T> {
     const cacheKey = CacheKeyGenerator.generate({
       collection: this.collectionName,
       operation: 'getSome',
-      query: query.build(),
+      query: query,
       pagination
     });
     
@@ -184,7 +184,7 @@ export class CachedFlongoCollection<T> extends FlongoCollection<T> {
     const cacheKey = CacheKeyGenerator.generate({
       collection: this.collectionName,
       operation: 'getFirst',
-      query: query.build()
+      query: query
     });
     
     // Try to get from cache
@@ -212,7 +212,7 @@ export class CachedFlongoCollection<T> extends FlongoCollection<T> {
     const cacheKey = CacheKeyGenerator.generate({
       collection: this.collectionName,
       operation: 'count',
-      query: query?.build()
+      query: query
     });
     
     // Try to get from cache
@@ -240,7 +240,7 @@ export class CachedFlongoCollection<T> extends FlongoCollection<T> {
     const cacheKey = CacheKeyGenerator.generate({
       collection: this.collectionName,
       operation: 'exists',
-      query: query.build()
+      query: query
     });
     
     // Try to get from cache

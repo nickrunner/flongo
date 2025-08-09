@@ -25,3 +25,10 @@
 - Built cache consistency verification mechanisms
 - Added comprehensive test coverage for caching layer
 
+### Issue #4 - 2025-08-09
+- Fixed type incompatibility between Filter<T> and ICollectionQuery by passing FlongoQuery objects directly to CacheKeyGenerator
+- Fixed CacheStatsCollector.getStats() return type to properly expose hits, misses, and clears properties
+- Fixed cache invalidation patterns to handle keys without query suffixes (e.g., 'count*' instead of 'count:*')
+- Fixed test failures by using correct cache key formats with 'flongo:' prefix
+- Fixed avgHitRate calculation to handle empty samples without returning NaN
+

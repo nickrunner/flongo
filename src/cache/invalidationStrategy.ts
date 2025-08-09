@@ -18,13 +18,13 @@ export class InvalidationStrategy {
    */
   async invalidateOnCreate<T>(document: Entity & T): Promise<void> {
     // Clear all count queries (count has changed)
-    await this.invalidatePattern('count:*');
+    await this.invalidatePattern('count*');
     
     // Clear all getAll queries without specific filters
-    await this.invalidatePattern('getAll:*');
+    await this.invalidatePattern('getAll*');
     
     // Clear exists queries that might now return true
-    await this.invalidatePattern('exists:*');
+    await this.invalidatePattern('exists*');
   }
 
   /**
@@ -40,9 +40,9 @@ export class InvalidationStrategy {
     await this.cacheStore.delete(getKey);
     
     // Clear queries that might include this document
-    await this.invalidatePattern(`getAll:*`);
-    await this.invalidatePattern(`getSome:*`);
-    await this.invalidatePattern(`getFirst:*`);
+    await this.invalidatePattern(`getAll*`);
+    await this.invalidatePattern(`getSome*`);
+    await this.invalidatePattern(`getFirst*`);
     
     // If certain fields are updated, we might need more targeted invalidation
     await this.invalidateAffectedQueries(id, updatedFields);
@@ -57,9 +57,9 @@ export class InvalidationStrategy {
       await this.invalidateCollection();
     } else {
       // Invalidate all queries that might overlap with the update query
-      await this.invalidatePattern('get*:*');
-      await this.invalidatePattern('count:*');
-      await this.invalidatePattern('exists:*');
+      await this.invalidatePattern('get*');
+      await this.invalidatePattern('count*');
+      await this.invalidatePattern('exists*');
     }
   }
 
@@ -76,13 +76,13 @@ export class InvalidationStrategy {
     await this.cacheStore.delete(getKey);
     
     // Clear all count queries (count has changed)
-    await this.invalidatePattern('count:*');
+    await this.invalidatePattern('count*');
     
     // Clear all collection queries
-    await this.invalidatePattern('getAll:*');
-    await this.invalidatePattern('getSome:*');
-    await this.invalidatePattern('getFirst:*');
-    await this.invalidatePattern('exists:*');
+    await this.invalidatePattern('getAll*');
+    await this.invalidatePattern('getSome*');
+    await this.invalidatePattern('getFirst*');
+    await this.invalidatePattern('exists*');
   }
 
   /**
@@ -108,7 +108,9 @@ export class InvalidationStrategy {
    */
   async invalidateCollection(): Promise<void> {
     const keys = await this.cacheStore.keys();
-    const collectionKeys = keys.filter(key => key.startsWith(this.collectionName));
+    // Cache keys format: flongo:collection:operation:...
+    const collectionPrefix = `flongo:${this.collectionName}:`;
+    const collectionKeys = keys.filter(key => key.startsWith(collectionPrefix));
     
     for (const key of collectionKeys) {
       await this.cacheStore.delete(key);
@@ -120,7 +122,8 @@ export class InvalidationStrategy {
    */
   async invalidatePattern(pattern: string): Promise<void> {
     const keys = await this.cacheStore.keys();
-    const fullPattern = `${this.collectionName}:${pattern}`;
+    // Cache keys format: flongo:collection:operation:...
+    const fullPattern = `flongo:${this.collectionName}:${pattern}`;
     const regex = this.patternToRegex(fullPattern);
     
     const matchingKeys = keys.filter(key => regex.test(key));
@@ -133,13 +136,12 @@ export class InvalidationStrategy {
    * Invalidate specific query cache
    */
   async invalidateQuery(query: FlongoQuery): Promise<void> {
-    const queryFilter = query.build();
     const patterns = [
-      CacheKeyGenerator.generate({ collection: this.collectionName, operation: 'getAll', query: queryFilter }),
-      CacheKeyGenerator.generate({ collection: this.collectionName, operation: 'getSome', query: queryFilter }),
-      CacheKeyGenerator.generate({ collection: this.collectionName, operation: 'getFirst', query: queryFilter }),
-      CacheKeyGenerator.generate({ collection: this.collectionName, operation: 'count', query: queryFilter }),
-      CacheKeyGenerator.generate({ collection: this.collectionName, operation: 'exists', query: queryFilter })
+      CacheKeyGenerator.generate({ collection: this.collectionName, operation: 'getAll', query: query }),
+      CacheKeyGenerator.generate({ collection: this.collectionName, operation: 'getSome', query: query }),
+      CacheKeyGenerator.generate({ collection: this.collectionName, operation: 'getFirst', query: query }),
+      CacheKeyGenerator.generate({ collection: this.collectionName, operation: 'count', query: query }),
+      CacheKeyGenerator.generate({ collection: this.collectionName, operation: 'exists', query: query })
     ];
     
     for (const key of patterns) {

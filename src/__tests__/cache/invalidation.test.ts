@@ -59,7 +59,8 @@ describe('InvalidationStrategy', () => {
       // Setup: Add some cached queries
       const countKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'count' });
       const getAllKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'getAll' });
-      const existsKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'exists', query: { name: 'test' } });
+      const existsQuery = new FlongoQuery().where('name').eq('test');
+      const existsKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'exists', query: existsQuery });
       
       await cacheStore.set(countKey, 10);
       await cacheStore.set(getAllKey, [{ _id: '1', name: 'user1' }]);
@@ -86,7 +87,8 @@ describe('InvalidationStrategy', () => {
       const docId = '123';
       const getKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'get', id: docId });
       const getAllKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'getAll' });
-      const getSomeKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'getSome', query: { active: true } });
+      const getSomeQuery = new FlongoQuery().where('active').eq(true);
+      const getSomeKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'getSome', query: getSomeQuery });
       
       await cacheStore.set(getKey, { _id: docId, name: 'user' });
       await cacheStore.set(getAllKey, [{ _id: docId, name: 'user' }]);
@@ -103,7 +105,8 @@ describe('InvalidationStrategy', () => {
     
     it('should invalidate queries filtering on updated fields', async () => {
       const docId = '123';
-      const queryKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'getAll', query: { status: 'active' } });
+      const statusQuery = new FlongoQuery().where('status').eq('active');
+      const queryKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'getAll', query: statusQuery });
       
       await cacheStore.set(queryKey, [{ _id: docId, status: 'active' }]);
       
@@ -121,7 +124,8 @@ describe('InvalidationStrategy', () => {
       const getKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'get', id: docId });
       const countKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'count' });
       const getAllKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'getAll' });
-      const existsKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'exists', query: { _id: docId } });
+      const existsQuery = new FlongoQuery().where('_id').eq(docId);
+      const existsKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'exists', query: existsQuery });
       
       await cacheStore.set(getKey, { _id: docId });
       await cacheStore.set(countKey, 5);
@@ -198,9 +202,9 @@ describe('InvalidationStrategy', () => {
   describe('invalidateCollection', () => {
     it('should clear all caches for the collection', async () => {
       // Add caches for this collection
-      const key1 = `${collectionName}:get:123`;
-      const key2 = `${collectionName}:getAll:query`;
-      const key3 = `${collectionName}:count:all`;
+      const key1 = `flongo:${collectionName}:get:123`;
+      const key2 = `flongo:${collectionName}:getAll:query`;
+      const key3 = `flongo:${collectionName}:count:all`;
       
       // Add cache for different collection
       const otherKey = 'otherCollection:get:456';
@@ -223,15 +227,15 @@ describe('InvalidationStrategy', () => {
   
   describe('invalidatePattern', () => {
     it('should invalidate caches matching the pattern', async () => {
-      const key1 = `${collectionName}:count:all`;
-      const key2 = `${collectionName}:count:filtered`;
-      const key3 = `${collectionName}:get:123`;
+      const key1 = `flongo:${collectionName}:count:all`;
+      const key2 = `flongo:${collectionName}:count:filtered`;
+      const key3 = `flongo:${collectionName}:get:123`;
       
       await cacheStore.set(key1, 10);
       await cacheStore.set(key2, 5);
       await cacheStore.set(key3, { _id: '123' });
       
-      await invalidationStrategy.invalidatePattern('count:*');
+      await invalidationStrategy.invalidatePattern('count*');
       
       // Count caches should be cleared
       expect(await cacheStore.has(key1)).toBe(false);
@@ -241,15 +245,15 @@ describe('InvalidationStrategy', () => {
     });
     
     it('should handle complex patterns', async () => {
-      const key1 = `${collectionName}:get:id123`;
-      const key2 = `${collectionName}:get:id456`;
-      const key3 = `${collectionName}:getAll:query`;
+      const key1 = `flongo:${collectionName}:get:id123`;
+      const key2 = `flongo:${collectionName}:get:id456`;
+      const key3 = `flongo:${collectionName}:getAll:query`;
       
       await cacheStore.set(key1, { _id: '123' });
       await cacheStore.set(key2, { _id: '456' });
       await cacheStore.set(key3, []);
       
-      await invalidationStrategy.invalidatePattern('get:*123*');
+      await invalidationStrategy.invalidatePattern('get*123*');
       
       // Only key1 should be cleared
       expect(await cacheStore.has(key1)).toBe(false);
@@ -261,13 +265,12 @@ describe('InvalidationStrategy', () => {
   describe('invalidateQuery', () => {
     it('should invalidate all operation types for a specific query', async () => {
       const query = new FlongoQuery().where('status').eq('active');
-      const queryFilter = query.build();
       
-      const getAllKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'getAll', query: queryFilter });
-      const getSomeKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'getSome', query: queryFilter });
-      const getFirstKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'getFirst', query: queryFilter });
-      const countKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'count', query: queryFilter });
-      const existsKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'exists', query: queryFilter });
+      const getAllKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'getAll', query: query });
+      const getSomeKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'getSome', query: query });
+      const getFirstKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'getFirst', query: query });
+      const countKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'count', query: query });
+      const existsKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'exists', query: query });
       
       // Set all cache entries
       await cacheStore.set(getAllKey, []);

@@ -137,14 +137,14 @@ describe('CacheManager - Consistency Verification', () => {
   
   describe('clearCollection', () => {
     it('should clear all collection caches', async () => {
-      await cacheStore.set(`${collectionName}:get:1`, { _id: '1' });
-      await cacheStore.set(`${collectionName}:getAll:query`, []);
-      await cacheStore.set('otherCollection:get:1', { _id: '1' });
+      await cacheStore.set(`flongo:${collectionName}:get:1`, { _id: '1' });
+      await cacheStore.set(`flongo:${collectionName}:getAll:query`, []);
+      await cacheStore.set('flongo:otherCollection:get:1', { _id: '1' });
       
       await cacheManager.clearCollection();
       
       const keys = await cacheStore.keys();
-      expect(keys).toEqual(['otherCollection:get:1']);
+      expect(keys).toEqual(['flongo:otherCollection:get:1']);
     });
     
     it('should record clear in stats', async () => {
@@ -158,19 +158,24 @@ describe('CacheManager - Consistency Verification', () => {
   describe('clearQuery', () => {
     it('should clear specific query caches', async () => {
       const query = new FlongoQuery().where('status').eq('active');
-      const queryFilter = query.build();
+      
+      // Use CacheKeyGenerator to create proper keys
+      const getAllKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'getAll', query: query });
+      const countKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'count', query: query });
+      const otherKey = CacheKeyGenerator.generate({ collection: collectionName, operation: 'getAll' });
       
       // Set up various caches
-      await cacheStore.set(`${collectionName}:getAll:${JSON.stringify(queryFilter)}`, []);
-      await cacheStore.set(`${collectionName}:count:${JSON.stringify(queryFilter)}`, 0);
-      await cacheStore.set(`${collectionName}:getAll:other`, []);
+      await cacheStore.set(getAllKey, []);
+      await cacheStore.set(countKey, 0);
+      await cacheStore.set(otherKey, []);
       
       await cacheManager.clearQuery(query);
       
       const keys = await cacheStore.keys();
       // Only the 'other' cache should remain
-      expect(keys).toContain(`${collectionName}:getAll:other`);
-      expect(keys).not.toContain(`${collectionName}:getAll:${JSON.stringify(queryFilter)}`);
+      expect(keys).toContain(otherKey);
+      expect(keys).not.toContain(getAllKey);
+      expect(keys).not.toContain(countKey);
     });
   });
   
@@ -300,7 +305,7 @@ describe('CacheManager - Consistency Verification', () => {
     
     it('should handle malformed cache keys', async () => {
       // Add cache with malformed key
-      await cacheStore.set(`${collectionName}:get:malformed`, { _id: '1' });
+      await cacheStore.set(`flongo:${collectionName}:get:malformed`, { _id: '1' });
       
       const result = await cacheManager.verifyConsistency(10, async () => ({ _id: '1' } as any));
       
@@ -315,7 +320,7 @@ describe('CacheManager - Consistency Verification', () => {
         array: [1, 2, 3]
       };
       
-      await cacheStore.set(`${collectionName}:get:{"id":"1"}`, cached);
+      await cacheStore.set(`flongo:${collectionName}:get:{"id":"1"}`, cached);
       
       const fresh = {
         _id: '1',
