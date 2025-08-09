@@ -49,3 +49,8 @@
 - Implemented core caching infrastructure with memory cache provider, cache key generation, and invalidation strategies
 
 
+### Issue #3 - 2025-08-09
+- Implemented CachedFlongoCollection with transparent read-through caching
+- Added automatic cache invalidation on all write operations
+- Implemented cache warmup, bypass predicates, and management APIs
+

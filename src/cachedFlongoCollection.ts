@@ -1,490 +1,686 @@
 import { FlongoCollection, FlongoCollectionOptions } from "./flongoCollection";
 import { FlongoQuery } from "./flongoQuery";
 import { Entity, Pagination, Repository } from "./types";
-import { 
-  CacheStore, 
-  MemoryCache, 
-  CacheKeyGenerator, 
-  CacheKeyOptions,
-  CacheConfiguration,
-  createDefaultConfig
-} from "./cache";
+import { CacheStore } from "./cache/cacheStore";
+import { MemoryCache } from "./cache/memoryCache";
+import { CacheKeyGenerator } from "./cache/cacheKeyGenerator";
 
+/**
+ * Configuration options for CachedFlongoCollection instances
+ */
 export interface CachedFlongoCollectionOptions extends FlongoCollectionOptions {
-  /** Whether to enable caching (defaults to true) */
-  enableCaching?: boolean;
-  /** Cache configuration */
-  cacheConfig?: CacheConfiguration;
+  /** Whether caching is enabled for this collection */
+  cacheEnabled?: boolean;
+  /** Time-to-live for cached entries in seconds */
+  cacheTTL?: number;
+  /** Maximum number of cached entries */
+  cacheMaxEntries?: number;
   /** Custom cache store implementation */
-  cacheStore?: CacheStore<unknown>;
-  /** Whether to enable cache monitoring */
-  enableMonitoring?: boolean;
-  /** Cache warmup data - array of queries to preload */
-  warmupQueries?: Array<{
-    query?: FlongoQuery;
-    pagination?: Pagination;
-  }>;
-  /** Cache bypass predicate - return true to bypass cache for a specific operation/query */
-  bypassCache?: (operation: string, query?: FlongoQuery) => boolean;
+  cacheStore?: CacheStore<any>;
+  /** Function to determine if a query should bypass cache */
+  cacheBypassPredicate?: (query?: FlongoQuery) => boolean;
+  /** Queries to warmup on initialization */
+  warmupQueries?: Array<{ query?: FlongoQuery; pagination?: Pagination }>;
 }
 
 /**
- * CachedFlongoCollection extends FlongoCollection with transparent caching layer.
- * Provides read-through caching for all read operations while maintaining
- * full API compatibility with FlongoCollection.
- * 
+ * CachedFlongoCollection extends FlongoCollection to provide transparent caching
+ * for all read operations. It maintains full API compatibility while intercepting
+ * read operations to check cache before querying MongoDB, and updating cache with
+ * fetched results.
+ *
  * Features:
- * - Transparent caching for get(), getAll(), getSome(), getFirst(), count(), exists()
- * - Intelligent cache key generation from FlongoQuery objects
- * - Configurable cache behavior per collection
+ * - Read-through caching for all read operations
+ * - Automatic cache invalidation on mutations
  * - Query result normalization for consistent caching
  * - Cache warmup capabilities
- * - Cache bypass mechanism
- * - Cache-aware pagination
- * 
+ * - Configurable cache behavior per collection
+ * - Cache bypass mechanism for specific queries
+ *
  * Example usage:
  * ```typescript
  * const users = new CachedFlongoCollection<User>('users', {
- *   enableCaching: true,
- *   cacheConfig: new CacheConfiguration({
- *     defaultTTL: 300,
- *     maxEntries: 10000
- *   }),
- *   warmupQueries: [
- *     { query: new FlongoQuery().where('status').eq('active') }
- *   ]
+ *   cacheEnabled: true,
+ *   cacheTTL: 300, // 5 minutes
+ *   cacheMaxEntries: 1000
  * });
  * ```
  */
 export class CachedFlongoCollection<T> extends FlongoCollection<T> {
-  private cache: CacheStore<unknown>;
-  private cacheConfig: CacheConfiguration;
+  private cacheStore: CacheStore<any>;
+  private cacheConfig: {
+    enabled: boolean;
+    ttl: number;
+    maxEntries: number;
+    bypassPredicate?: (query?: FlongoQuery) => boolean;
+  };
   private collectionName: Repository;
-  private bypassPredicate?: (operation: string, query?: FlongoQuery) => boolean;
-  private cachingEnabled: boolean;
 
+  /**
+   * Creates a new CachedFlongoCollection instance
+   * @param collectionName - Name of the MongoDB collection
+   * @param options - Configuration options for caching and collection behavior
+   */
   constructor(collectionName: Repository, options: CachedFlongoCollectionOptions = {}) {
     super(collectionName, options);
     
     this.collectionName = collectionName;
-    this.cachingEnabled = options.enableCaching !== false;
-    this.bypassPredicate = options.bypassCache;
     
     // Initialize cache configuration
-    this.cacheConfig = options.cacheConfig || new CacheConfiguration(createDefaultConfig());
-    
-    // Initialize cache store
-    this.cache = options.cacheStore || new MemoryCache({
-      maxEntries: this.cacheConfig.maxEntries,
-      defaultTTL: this.cacheConfig.defaultTTL,
-      enableStats: this.cacheConfig.enableStats
-    });
-    
-    // Monitoring is handled through cache store stats
-    
-    // Store warmup queries for manual warmup if needed
-    // Don't perform automatic warmup in constructor to avoid side effects
-    // Call warmupCache() manually after construction if needed
-  }
-
-  /**
-   * Checks if caching should be bypassed for the given operation
-   */
-  private shouldBypassCache(operation: string, query?: FlongoQuery): boolean {
-    if (!this.cachingEnabled) {
-      return true;
-    }
-    
-    if (this.bypassPredicate) {
-      return this.bypassPredicate(operation, query);
-    }
-    
-    return false;
-  }
-
-  /**
-   * Generates a cache key for the given operation and parameters
-   */
-  private generateCacheKey(
-    operation: string, 
-    id?: string, 
-    query?: FlongoQuery, 
-    pagination?: Pagination,
-    additionalParams?: Record<string, unknown>
-  ): string {
-    const options: CacheKeyOptions = {
-      collection: this.collectionName,
-      operation,
-      id,
-      query,
-      pagination,
-      additionalParams
+    this.cacheConfig = {
+      enabled: options.cacheEnabled ?? true,
+      ttl: options.cacheTTL ?? 300, // Default 5 minutes
+      maxEntries: options.cacheMaxEntries ?? 10000,
+      bypassPredicate: options.cacheBypassPredicate
     };
     
-    return CacheKeyGenerator.generate(options);
+    // Initialize cache store
+    this.cacheStore = options.cacheStore ?? new MemoryCache({
+      maxEntries: this.cacheConfig.maxEntries,
+      defaultTTL: this.cacheConfig.ttl,
+      enableStats: true
+    });
+    
+    // Perform cache warmup if configured
+    if (options.warmupQueries && options.warmupQueries.length > 0) {
+      this.warmupCache(options.warmupQueries).catch(err => {
+        console.warn(`Cache warmup failed for collection ${collectionName}:`, err);
+      });
+    }
   }
+
+  // ===========================================
+  // READ OPERATIONS WITH CACHING
+  // ===========================================
 
   /**
-   * Records cache hit/miss metrics if monitoring is enabled
+   * Retrieves a single document by its ID with caching
+   * @param id - Document ID (string that will be converted to ObjectId)
+   * @returns Promise resolving to the document with Entity metadata
+   * @throws Error404 if document is not found
    */
-  private recordCacheMetrics(hit: boolean, operation: string) {
-    // Monitoring is handled by the cache store itself through stats
-    // This method is kept for future extension if needed
-  }
-
   async get(id: string): Promise<Entity & T> {
-    if (this.shouldBypassCache('get')) {
+    if (!this.cacheConfig.enabled) {
       return super.get(id);
     }
-    
-    const cacheKey = this.generateCacheKey('get', id);
-    
-    // Try to get from cache
-    const cached = await this.cache.get(cacheKey) as (Entity & T) | undefined;
+
+    const cacheKey = CacheKeyGenerator.generate({
+      collection: this.collectionName,
+      operation: 'get',
+      id
+    });
+
+    // Check cache first
+    const cached = await this.cacheStore.get(cacheKey);
     if (cached) {
-      this.recordCacheMetrics(true, 'get');
-      return cached;
+      return cached as Entity & T;
     }
-    
+
     // Cache miss - fetch from database
-    this.recordCacheMetrics(false, 'get');
     const result = await super.get(id);
     
     // Store in cache
-    await this.cache.set(cacheKey, result, this.cacheConfig.defaultTTL);
+    await this.cacheStore.set(cacheKey, result, this.cacheConfig.ttl);
     
     return result;
   }
 
+  /**
+   * Retrieves multiple documents based on query and pagination with caching
+   * @param query - Optional FlongoQuery for filtering
+   * @param pagination - Optional pagination settings
+   * @returns Promise resolving to array of documents
+   */
   async getAll(query?: FlongoQuery, pagination?: Pagination): Promise<(Entity & T)[]> {
-    if (this.shouldBypassCache('getAll', query)) {
+    if (!this.cacheConfig.enabled || this.shouldBypassCache(query)) {
       return super.getAll(query, pagination);
     }
-    
-    const cacheKey = this.generateCacheKey('getAll', undefined, query, pagination);
-    
-    // Try to get from cache
-    const cached = await this.cache.get(cacheKey) as (Entity & T)[] | undefined;
+
+    const cacheKey = CacheKeyGenerator.generate({
+      collection: this.collectionName,
+      operation: 'getAll',
+      query: query || new FlongoQuery(),
+      pagination
+    });
+
+    // Check cache first
+    const cached = await this.cacheStore.get(cacheKey);
     if (cached) {
-      this.recordCacheMetrics(true, 'getAll');
-      return cached;
+      return cached as (Entity & T)[];
     }
-    
+
     // Cache miss - fetch from database
-    this.recordCacheMetrics(false, 'getAll');
     const result = await super.getAll(query, pagination);
     
-    // Store in cache with custom TTL if configured
-    const ttl = this.cacheConfig.customTTLs?.['getAll'] || this.cacheConfig.defaultTTL;
-    await this.cache.set(cacheKey, result, ttl);
+    // Store in cache
+    await this.cacheStore.set(cacheKey, result, this.cacheConfig.ttl);
     
     return result;
   }
 
+  /**
+   * Retrieves a subset of documents with caching
+   * @param query - FlongoQuery for filtering (required)
+   * @param pagination - Pagination settings (required)
+   * @returns Promise resolving to array of documents
+   */
   async getSome(query: FlongoQuery, pagination: Pagination): Promise<(Entity & T)[]> {
-    if (this.shouldBypassCache('getSome', query)) {
+    if (!this.cacheConfig.enabled || this.shouldBypassCache(query)) {
       return super.getSome(query, pagination);
     }
-    
-    const cacheKey = this.generateCacheKey('getSome', undefined, query, pagination);
-    
-    // Try to get from cache
-    const cached = await this.cache.get(cacheKey) as (Entity & T)[] | undefined;
+
+    const cacheKey = CacheKeyGenerator.generate({
+      collection: this.collectionName,
+      operation: 'getSome',
+      query,
+      pagination
+    });
+
+    // Check cache first
+    const cached = await this.cacheStore.get(cacheKey);
     if (cached) {
-      this.recordCacheMetrics(true, 'getSome');
-      return cached;
+      return cached as (Entity & T)[];
     }
-    
+
     // Cache miss - fetch from database
-    this.recordCacheMetrics(false, 'getSome');
     const result = await super.getSome(query, pagination);
     
-    // Store in cache with custom TTL if configured
-    const ttl = this.cacheConfig.customTTLs?.['getSome'] || this.cacheConfig.defaultTTL;
-    await this.cache.set(cacheKey, result, ttl);
+    // Store in cache
+    await this.cacheStore.set(cacheKey, result, this.cacheConfig.ttl);
     
     return result;
   }
 
+  /**
+   * Retrieves the first document matching the query with caching
+   * @param query - FlongoQuery for filtering
+   * @returns Promise resolving to the first matching document
+   */
   async getFirst(query: FlongoQuery): Promise<Entity & T> {
-    if (this.shouldBypassCache('getFirst', query)) {
+    if (!this.cacheConfig.enabled || this.shouldBypassCache(query)) {
       return super.getFirst(query);
     }
-    
-    const cacheKey = this.generateCacheKey('getFirst', undefined, query);
-    
-    // Try to get from cache
-    const cached = await this.cache.get(cacheKey) as (Entity & T) | undefined;
+
+    const cacheKey = CacheKeyGenerator.generate({
+      collection: this.collectionName,
+      operation: 'getFirst',
+      query
+    });
+
+    // Check cache first
+    const cached = await this.cacheStore.get(cacheKey);
     if (cached) {
-      this.recordCacheMetrics(true, 'getFirst');
-      return cached;
+      return cached as Entity & T;
     }
-    
+
     // Cache miss - fetch from database
-    this.recordCacheMetrics(false, 'getFirst');
     const result = await super.getFirst(query);
     
-    // Store in cache with custom TTL if configured
-    const ttl = this.cacheConfig.customTTLs?.['getFirst'] || this.cacheConfig.defaultTTL;
-    await this.cache.set(cacheKey, result, ttl);
+    // Store in cache
+    await this.cacheStore.set(cacheKey, result, this.cacheConfig.ttl);
     
     return result;
   }
 
+  /**
+   * Counts documents matching the query with caching
+   * @param query - Optional FlongoQuery for filtering
+   * @returns Promise resolving to the count of matching documents
+   */
   async count(query?: FlongoQuery): Promise<number> {
-    if (this.shouldBypassCache('count', query)) {
+    if (!this.cacheConfig.enabled || this.shouldBypassCache(query)) {
       return super.count(query);
     }
-    
-    const cacheKey = this.generateCacheKey('count', undefined, query);
-    
-    // Try to get from cache
-    const cached = await this.cache.get(cacheKey) as number | undefined;
+
+    const cacheKey = CacheKeyGenerator.generate({
+      collection: this.collectionName,
+      operation: 'count',
+      query: query || new FlongoQuery()
+    });
+
+    // Check cache first
+    const cached = await this.cacheStore.get(cacheKey);
     if (cached !== undefined) {
-      this.recordCacheMetrics(true, 'count');
-      return cached;
+      return cached as number;
     }
-    
+
     // Cache miss - fetch from database
-    this.recordCacheMetrics(false, 'count');
     const result = await super.count(query);
     
-    // Store in cache with custom TTL if configured
-    const ttl = this.cacheConfig.customTTLs?.['count'] || this.cacheConfig.defaultTTL;
-    await this.cache.set(cacheKey, result, ttl);
+    // Store in cache
+    await this.cacheStore.set(cacheKey, result, this.cacheConfig.ttl);
     
     return result;
   }
 
+  /**
+   * Checks if any documents match the query with caching
+   * @param query - FlongoQuery for filtering
+   * @returns Promise resolving to true if any documents match, false otherwise
+   */
   async exists(query: FlongoQuery): Promise<boolean> {
-    if (this.shouldBypassCache('exists', query)) {
+    if (!this.cacheConfig.enabled || this.shouldBypassCache(query)) {
       return super.exists(query);
     }
-    
-    const cacheKey = this.generateCacheKey('exists', undefined, query);
-    
-    // Try to get from cache
-    const cached = await this.cache.get(cacheKey) as boolean | undefined;
+
+    const cacheKey = CacheKeyGenerator.generate({
+      collection: this.collectionName,
+      operation: 'exists',
+      query
+    });
+
+    // Check cache first
+    const cached = await this.cacheStore.get(cacheKey);
     if (cached !== undefined) {
-      this.recordCacheMetrics(true, 'exists');
-      return cached;
+      return cached as boolean;
     }
-    
+
     // Cache miss - fetch from database
-    this.recordCacheMetrics(false, 'exists');
     const result = await super.exists(query);
     
-    // Store in cache with custom TTL if configured
-    const ttl = this.cacheConfig.customTTLs?.['exists'] || this.cacheConfig.defaultTTL;
-    await this.cache.set(cacheKey, result, ttl);
+    // Store in cache
+    await this.cacheStore.set(cacheKey, result, this.cacheConfig.ttl);
     
     return result;
   }
 
+  // ===========================================
+  // WRITE OPERATIONS WITH CACHE INVALIDATION
+  // ===========================================
+
+  /**
+   * Creates a new document and invalidates relevant caches
+   * @param attributes - Document data (without Entity metadata)
+   * @param clientId - Optional client ID for audit trail
+   * @returns Promise resolving to the created document with Entity metadata
+   */
   async create(attributes: T, clientId?: string): Promise<Entity & T> {
     const result = await super.create(attributes, clientId);
     
-    // Invalidate count and exists caches as they might be affected
-    await this.invalidateCacheByOperation('count');
-    await this.invalidateCacheByOperation('exists');
-    await this.invalidateCacheByOperation('getAll');
-    await this.invalidateCacheByOperation('getSome');
+    if (this.cacheConfig.enabled) {
+      // Invalidate all query caches for this collection
+      await this.invalidateQueryCaches();
+    }
     
     return result;
   }
 
+  /**
+   * Creates multiple documents and invalidates relevant caches
+   * @param attributes - Array of document data
+   * @param clientId - Optional client ID for audit trail
+   */
   async batchCreate(attributes: T[], clientId?: string): Promise<void> {
     await super.batchCreate(attributes, clientId);
     
-    // Invalidate all read operation caches
-    await this.invalidateCache();
+    if (this.cacheConfig.enabled) {
+      // Invalidate all query caches for this collection
+      await this.invalidateQueryCaches();
+    }
   }
 
+  /**
+   * Updates a single document and invalidates relevant caches
+   * @param id - Document ID to update
+   * @param attributes - Fields to update
+   * @param clientId - Optional client ID for audit trail
+   */
   async update(id: string, attributes: any, clientId?: string): Promise<void> {
     await super.update(id, attributes, clientId);
     
-    // Invalidate specific document cache and all query caches
-    await this.invalidateCacheById(id);
+    if (this.cacheConfig.enabled) {
+      // Invalidate specific document cache
+      const getKey = CacheKeyGenerator.generate({
+        collection: this.collectionName,
+        operation: 'get',
+        id
+      });
+      await this.cacheStore.delete(getKey);
+      
+      // Invalidate all query caches for this collection
+      await this.invalidateQueryCaches();
+    }
   }
 
+  /**
+   * Updates multiple documents and invalidates relevant caches
+   * @param attributes - Fields to update
+   * @param query - Optional FlongoQuery to filter documents
+   * @param clientId - Optional client ID for audit trail
+   */
   async updateAll(attributes: any, query?: FlongoQuery, clientId?: string): Promise<void> {
     await super.updateAll(attributes, query, clientId);
     
-    // Conservative approach: invalidate all caches since we don't know which documents were affected
-    await this.invalidateCache();
+    if (this.cacheConfig.enabled) {
+      // Invalidate all caches for this collection
+      await this.clearCache();
+    }
   }
 
+  /**
+   * Updates the first document and invalidates relevant caches
+   * @param attributes - Fields to update
+   * @param query - Optional FlongoQuery to filter documents
+   * @param clientId - Optional client ID for audit trail
+   * @returns Promise resolving to the updated document
+   */
   async updateFirst(attributes: any, query?: FlongoQuery, clientId?: string): Promise<Entity & T> {
     const result = await super.updateFirst(attributes, query, clientId);
     
-    // Invalidate the specific document and all query caches
-    if (result && result._id) {
-      await this.invalidateCacheById(result._id);
-    } else {
-      // If we can't determine the ID, invalidate all caches
-      await this.invalidateCache();
+    if (this.cacheConfig.enabled) {
+      // Invalidate the specific document cache if we have the ID
+      if (result._id) {
+        const getKey = CacheKeyGenerator.generate({
+          collection: this.collectionName,
+          operation: 'get',
+          id: result._id
+        });
+        await this.cacheStore.delete(getKey);
+      }
+      
+      // Invalidate all query caches for this collection
+      await this.invalidateQueryCaches();
     }
     
     return result;
   }
 
+  /**
+   * Deletes a single document and invalidates relevant caches
+   * @param id - Document ID to delete
+   * @param clientId - ID of the client performing the deletion
+   */
   async delete(id: string, clientId: string): Promise<void> {
     await super.delete(id, clientId);
     
-    // Invalidate specific document cache and all query caches
-    await this.invalidateCacheById(id);
+    if (this.cacheConfig.enabled) {
+      // Invalidate specific document cache
+      const getKey = CacheKeyGenerator.generate({
+        collection: this.collectionName,
+        operation: 'get',
+        id
+      });
+      await this.cacheStore.delete(getKey);
+      
+      // Invalidate all query caches for this collection
+      await this.invalidateQueryCaches();
+    }
   }
 
+  /**
+   * Deletes multiple documents and invalidates relevant caches
+   * @param ids - Array of document IDs to delete
+   * @param clientId - ID of the client performing the deletion
+   */
   async batchDelete(ids: string[], clientId: string): Promise<void> {
     await super.batchDelete(ids, clientId);
     
-    // Invalidate all caches for deleted documents and queries
-    for (const id of ids) {
-      const cacheKey = this.generateCacheKey('get', id);
-      await this.cache.delete(cacheKey);
+    if (this.cacheConfig.enabled) {
+      // Invalidate specific document caches
+      for (const id of ids) {
+        const getKey = CacheKeyGenerator.generate({
+          collection: this.collectionName,
+          operation: 'get',
+          id
+        });
+        await this.cacheStore.delete(getKey);
+      }
+      
+      // Invalidate all query caches for this collection
+      await this.invalidateQueryCaches();
     }
-    
-    // Invalidate all query caches
-    await this.invalidateCacheByOperation('getAll');
-    await this.invalidateCacheByOperation('getSome');
-    await this.invalidateCacheByOperation('getFirst');
-    await this.invalidateCacheByOperation('count');
-    await this.invalidateCacheByOperation('exists');
   }
 
+  // ===========================================
+  // ATOMIC OPERATIONS WITH CACHE INVALIDATION
+  // ===========================================
+
+  /**
+   * Atomically increments a numeric field and invalidates cache
+   * @param id - Document ID
+   * @param key - Field name to increment
+   * @param amt - Amount to increment by (defaults to 1)
+   */
   async increment(id: string, key: string, amt?: number): Promise<void> {
     await super.increment(id, key, amt);
-    await this.invalidateCacheById(id);
+    
+    if (this.cacheConfig.enabled) {
+      // Invalidate specific document cache
+      const getKey = CacheKeyGenerator.generate({
+        collection: this.collectionName,
+        operation: 'get',
+        id
+      });
+      await this.cacheStore.delete(getKey);
+      
+      // Invalidate query caches that might include this document
+      await this.invalidateQueryCaches();
+    }
   }
 
+  /**
+   * Atomically decrements a numeric field and invalidates cache
+   * @param id - Document ID
+   * @param key - Field name to decrement
+   * @param amt - Amount to decrement by (defaults to 1)
+   */
   async decrement(id: string, key: string, amt?: number): Promise<void> {
     await super.decrement(id, key, amt);
-    await this.invalidateCacheById(id);
+    
+    if (this.cacheConfig.enabled) {
+      // Invalidate specific document cache
+      const getKey = CacheKeyGenerator.generate({
+        collection: this.collectionName,
+        operation: 'get',
+        id
+      });
+      await this.cacheStore.delete(getKey);
+      
+      // Invalidate query caches that might include this document
+      await this.invalidateQueryCaches();
+    }
   }
 
+  /**
+   * Atomically appends items to an array field and invalidates cache
+   * @param id - Document ID
+   * @param key - Array field name
+   * @param items - Items to append to the array
+   */
   async append(id: string, key: string, items: any[]): Promise<void> {
     await super.append(id, key, items);
-    await this.invalidateCacheById(id);
+    
+    if (this.cacheConfig.enabled) {
+      // Invalidate specific document cache
+      const getKey = CacheKeyGenerator.generate({
+        collection: this.collectionName,
+        operation: 'get',
+        id
+      });
+      await this.cacheStore.delete(getKey);
+      
+      // Invalidate query caches that might include this document
+      await this.invalidateQueryCaches();
+    }
   }
 
+  /**
+   * Atomically removes items from an array field and invalidates cache
+   * @param id - Document ID
+   * @param key - Array field name
+   * @param items - Items to remove from the array
+   */
   async arrRemove(id: string, key: string, items: any[]): Promise<void> {
     await super.arrRemove(id, key, items);
-    await this.invalidateCacheById(id);
+    
+    if (this.cacheConfig.enabled) {
+      // Invalidate specific document cache
+      const getKey = CacheKeyGenerator.generate({
+        collection: this.collectionName,
+        operation: 'get',
+        id
+      });
+      await this.cacheStore.delete(getKey);
+      
+      // Invalidate query caches that might include this document
+      await this.invalidateQueryCaches();
+    }
+  }
+
+  // ===========================================
+  // CACHE MANAGEMENT
+  // ===========================================
+
+  /**
+   * Warms up the cache with predefined queries
+   * @param queries - Array of queries to execute and cache
+   */
+  async warmupCache(queries: Array<{ query?: FlongoQuery; pagination?: Pagination }>): Promise<void> {
+    if (!this.cacheConfig.enabled) {
+      return;
+    }
+
+    const warmupPromises = queries.map(async ({ query, pagination }) => {
+      try {
+        // Execute the query to populate cache
+        await this.getAll(query, pagination);
+      } catch (err) {
+        console.warn(`Cache warmup query failed:`, err);
+      }
+    });
+
+    await Promise.all(warmupPromises);
   }
 
   /**
-   * Invalidates cache entry for a specific document ID
-   * @param id - Document ID to invalidate
+   * Clears all cached entries for this collection
    */
-  async invalidateCacheById(id: string): Promise<void> {
-    const cacheKey = this.generateCacheKey('get', id);
-    await this.cache.delete(cacheKey);
-    
-    // Also invalidate any queries that might include this document
-    // This is a conservative approach - in production you might want more sophisticated invalidation
-    await this.invalidateCacheByOperation('getAll');
-    await this.invalidateCacheByOperation('getSome');
-    await this.invalidateCacheByOperation('getFirst');
-    await this.invalidateCacheByOperation('count');
-    await this.invalidateCacheByOperation('exists');
-  }
-  
-  /**
-   * Invalidates cache entries for a specific operation
-   * @param operation - Operation name (e.g., 'get', 'getAll', 'count')
-   */
-  async invalidateCacheByOperation(operation: string): Promise<void> {
-    const pattern = CacheKeyGenerator.generatePattern(this.collectionName, operation);
-    const keys = await this.cache.keys();
-    const keysToDelete = keys.filter(key => key.startsWith(pattern.replace('*', '')));
-    
-    for (const key of keysToDelete) {
-      await this.cache.delete(key);
+  async clearCache(): Promise<void> {
+    if (!this.cacheConfig.enabled) {
+      return;
+    }
+
+    // Get all keys for this collection
+    const keys = await this.cacheStore.keys();
+    const collectionKeys = keys.filter(key => 
+      CacheKeyGenerator.getCollectionFromKey(key) === this.collectionName
+    );
+
+    // Delete all collection keys
+    for (const key of collectionKeys) {
+      await this.cacheStore.delete(key);
     }
   }
 
   /**
    * Invalidates cache entries matching a pattern
-   * @param pattern - Pattern to match cache keys (e.g., specific operation or query)
+   * @param pattern - Pattern to match cache keys (e.g., "flongo:users:getAll*")
    */
   async invalidateCache(pattern?: string): Promise<void> {
-    if (!pattern) {
-      // Clear all cache entries for this collection
-      const collectionPattern = CacheKeyGenerator.generatePattern(this.collectionName);
-      const keys = await this.cache.keys();
-      const keysToDelete = keys.filter(key => key.startsWith(collectionPattern.replace('*', '')));
-      
-      for (const key of keysToDelete) {
-        await this.cache.delete(key);
+    if (!this.cacheConfig.enabled) {
+      return;
+    }
+
+    const searchPattern = pattern || CacheKeyGenerator.generatePattern(this.collectionName);
+    const keys = await this.cacheStore.keys();
+    const matchingKeys = keys.filter(key => {
+      if (pattern) {
+        // Use glob-like pattern matching
+        const regex = new RegExp(searchPattern.replace(/\*/g, '.*'));
+        return regex.test(key);
+      } else {
+        // Match all keys for this collection
+        return CacheKeyGenerator.getCollectionFromKey(key) === this.collectionName;
       }
-    } else {
-      // Clear specific pattern
-      const keys = await this.cache.keys();
-      const keysToDelete = keys.filter(key => key.includes(pattern));
-      
-      for (const key of keysToDelete) {
-        await this.cache.delete(key);
-      }
+    });
+
+    // Delete matching keys
+    for (const key of matchingKeys) {
+      await this.cacheStore.delete(key);
     }
   }
 
   /**
-   * Warms up the cache with predefined queries
-   * @param warmupQueries - Array of queries to preload into cache
-   */
-  async warmupCache(warmupQueries: Array<{ query?: FlongoQuery; pagination?: Pagination }>): Promise<void> {
-    const warmupPromises = warmupQueries.map(async ({ query, pagination }) => {
-      try {
-        // Force cache population by calling the read methods
-        // The methods will automatically cache the results
-        if (query && pagination) {
-          await this.getSome(query, pagination);
-        } else if (query) {
-          await this.getAll(query);
-        } else {
-          await this.getAll(undefined, pagination);
-        }
-      } catch (error) {
-        console.warn(`Cache warmup failed for query: ${error}`);
-      }
-    });
-    
-    await Promise.all(warmupPromises);
-  }
-
-  /**
    * Gets cache statistics for this collection
+   * @returns Promise resolving to cache statistics
    */
-  async getCacheStats() {
-    return this.cache.getStats();
-  }
-  
-  /**
-   * Resets cache statistics
-   */
-  async resetCacheStats() {
-    return this.cache.resetStats();
+  async getCacheStats(): Promise<any> {
+    if (!this.cacheConfig.enabled) {
+      return {
+        enabled: false,
+        stats: null
+      };
+    }
+
+    const stats = await this.cacheStore.getStats();
+    const keys = await this.cacheStore.keys();
+    const collectionKeys = keys.filter(key => 
+      CacheKeyGenerator.getCollectionFromKey(key) === this.collectionName
+    );
+
+    return {
+      enabled: true,
+      collection: this.collectionName,
+      config: this.cacheConfig,
+      collectionEntries: collectionKeys.length,
+      totalStats: stats
+    };
   }
 
   /**
-   * Clears all cache entries for this collection
-   */
-  async clearCache(): Promise<void> {
-    await this.invalidateCache();
-  }
-
-  /**
-   * Enables or disables caching dynamically
-   * @param enabled - Whether to enable caching
+   * Enables or disables caching for this collection
+   * @param enabled - Whether caching should be enabled
    */
   setCachingEnabled(enabled: boolean): void {
-    this.cachingEnabled = enabled;
+    this.cacheConfig.enabled = enabled;
+    if (!enabled) {
+      // Clear cache when disabling
+      this.clearCache().catch(err => {
+        console.warn(`Failed to clear cache when disabling:`, err);
+      });
+    }
   }
-  
+
   /**
-   * Gets the current caching status
+   * Updates cache configuration
+   * @param config - Partial configuration to update
    */
-  isCachingEnabled(): boolean {
-    return this.cachingEnabled;
+  updateCacheConfig(config: Partial<typeof this.cacheConfig>): void {
+    Object.assign(this.cacheConfig, config);
+  }
+
+  // ===========================================
+  // PRIVATE HELPER METHODS
+  // ===========================================
+
+  /**
+   * Determines if a query should bypass the cache
+   * @private
+   * @param query - Query to check
+   * @returns True if cache should be bypassed
+   */
+  private shouldBypassCache(query?: FlongoQuery): boolean {
+    if (!this.cacheConfig.bypassPredicate) {
+      return false;
+    }
+    return this.cacheConfig.bypassPredicate(query);
+  }
+
+  /**
+   * Invalidates all query caches for this collection
+   * @private
+   */
+  private async invalidateQueryCaches(): Promise<void> {
+    const keys = await this.cacheStore.keys();
+    const queryKeys = keys.filter(key => {
+      const parsed = CacheKeyGenerator.parseKey(key);
+      return parsed.collection === this.collectionName && 
+             parsed.operation && 
+             ['getAll', 'getSome', 'getFirst', 'count', 'exists'].includes(parsed.operation);
+    });
+
+    for (const key of queryKeys) {
+      await this.cacheStore.delete(key);
+    }
   }
 }

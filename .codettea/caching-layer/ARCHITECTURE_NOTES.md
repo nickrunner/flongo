@@ -169,17 +169,47 @@ The caching layer provides a transparent, high-performance cache for MongoDB ope
 - ✅ Invalidation strategies (, , )
 
 
-### Phase 2: Read-Through Caching
-- CachedFlongoCollection wrapper class
-- Query result caching for all read methods
-- Cache warmup and preloading
-- Statistics and monitoring
+### Phase 2: Read-Through Caching ✅ COMPLETED
+- ✅ CachedFlongoCollection wrapper class (src/cachedFlongoCollection.ts) with:
+  - Full API compatibility with FlongoCollection
+  - Transparent caching for all read operations
+  - Automatic cache key generation from queries
+- ✅ Query result caching for:
+  - get() - individual document retrieval
+  - getAll() - query-based document lists
+  - getSome() - paginated query results
+  - getFirst() - first matching document
+  - count() - document count queries
+  - exists() - existence checks
+- ✅ Cache warmup and preloading:
+  - Manual warmupCache() method
+  - Configurable warmup queries
+  - Error-resilient warmup process
+- ✅ Cache bypass mechanism:
+  - Configurable bypass predicates
+  - Per-operation bypass control
+  - Sensitive query exclusion
+- ✅ Statistics and monitoring through cache store
 
-### Phase 3: Write-Through & Invalidation
-- Mutation cache updates
-- Smart query invalidation
-- Consistency guarantees
-- Management APIs and debugging tools
+### Phase 3: Write-Through & Invalidation ✅ COMPLETED (Part of Phase 2)
+- ✅ Automatic cache invalidation on:
+  - create() - invalidates query caches
+  - update() - invalidates specific document and queries
+  - delete() - removes from cache and invalidates queries
+  - Batch operations (batchCreate, batchDelete)
+  - Atomic operations (increment, decrement, append, arrRemove)
+- ✅ Smart query invalidation:
+  - Selective invalidation by operation type
+  - Pattern-based cache clearing
+  - Collection-scoped invalidation
+- ✅ Consistency guarantees:
+  - Write operations always invalidate affected caches
+  - Read-after-write consistency maintained
+- ✅ Management APIs:
+  - clearCache() - clear all collection caches
+  - invalidateCache() - pattern-based clearing
+  - getCacheStats() - performance metrics
+  - setCachingEnabled() - dynamic enable/disable
 
 ## Configuration Example
 
