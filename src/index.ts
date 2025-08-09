@@ -1,6 +1,7 @@
 // Main exports for flongo package
 
 export { FlongoCollection, FlongoCollectionOptions } from "./flongoCollection";
+export { CachedFlongoCollection, CachedFlongoCollectionOptions } from "./cachedFlongoCollection";
 export { FlongoQuery, FlongoQueryBuilder } from "./flongoQuery";
 export { initializeFlongo, FlongoConfig, flongoClient, flongoDb } from "./flongo";
 export { Error404, Error400 } from "./errors";
@@ -42,6 +43,7 @@ export {
   TTLStrategy,
   LRUStrategy,
   CacheConfig,
+  CacheMode,
   CacheProviderConfig,
   CacheConfiguration,
   createDefaultConfig,
@@ -54,3 +56,8 @@ export {
   getGlobalCacheMonitor,
   resetGlobalCacheMonitor
 } from "./cache";
+
+// Write-through and cache management exports
+export { WriteThrough, AtomicOperationType, AtomicOperationData } from "./cache/writeThrough";
+export { InvalidationStrategy as CacheInvalidationStrategy } from "./cache/invalidationStrategy";
+export { CacheManager, CacheDebugInfo, ConsistencyCheckResult } from "./cache/cacheManager";

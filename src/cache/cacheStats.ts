@@ -21,7 +21,12 @@ export interface CacheMetrics {
 export class CacheStatsCollector {
   private startTime: number;
   private lastResetTime: number;
-  private metrics: CacheMetrics;
+  private metrics: CacheMetrics & {
+    hits: number;
+    misses: number;
+    clears: number;
+    responseTimeHistory: number[];
+  };
   private maxHistorySize: number;
   
   constructor(maxHistorySize: number = 1000) {
@@ -33,7 +38,11 @@ export class CacheStatsCollector {
       operationLatencies: new Map(),
       collectionStats: new Map(),
       keyAccessCounts: new Map(),
-      memoryUsageOverTime: []
+      memoryUsageOverTime: [],
+      hits: 0,
+      misses: 0,
+      clears: 0,
+      responseTimeHistory: []
     };
   }
   
@@ -57,6 +66,28 @@ export class CacheStatsCollector {
   recordKeyAccess(key: string): void {
     const count = this.metrics.keyAccessCounts.get(key) || 0;
     this.metrics.keyAccessCounts.set(key, count + 1);
+  }
+  
+  recordHit(): void {
+    this.metrics.hits++;
+    this.recordOperation('cache:hit', 0);
+  }
+  
+  recordMiss(): void {
+    this.metrics.misses++;
+    this.recordOperation('cache:miss', 0);
+  }
+  
+  recordResponseTime(timeMs: number): void {
+    this.metrics.responseTimeHistory.push(timeMs);
+    if (this.metrics.responseTimeHistory.length > this.maxHistorySize) {
+      this.metrics.responseTimeHistory.shift();
+    }
+    this.recordOperation('cache:response', timeMs);
+  }
+  
+  recordClear(): void {
+    this.metrics.clears++;
   }
   
   recordMemoryUsage(usageBytes: number): void {
@@ -159,6 +190,19 @@ export class CacheStatsCollector {
     return new Map(this.metrics.collectionStats);
   }
   
+  getStats(): CacheMetrics & { requests: number; avgResponseTime: number } {
+    const requests = this.metrics.hits + this.metrics.misses;
+    const avgResponseTime = this.metrics.responseTimeHistory.length > 0
+      ? this.calculateAverage(this.metrics.responseTimeHistory)
+      : 0;
+    
+    return {
+      ...this.metrics,
+      requests,
+      avgResponseTime
+    };
+  }
+  
   reset(): void {
     this.lastResetTime = Date.now();
     this.metrics = {
@@ -166,7 +210,11 @@ export class CacheStatsCollector {
       operationLatencies: new Map(),
       collectionStats: new Map(),
       keyAccessCounts: new Map(),
-      memoryUsageOverTime: []
+      memoryUsageOverTime: [],
+      hits: 0,
+      misses: 0,
+      clears: 0,
+      responseTimeHistory: []
     };
   }
   

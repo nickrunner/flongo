@@ -27,6 +27,7 @@ export {
 
 export {
   CacheConfig,
+  CacheMode,
   CacheProviderConfig,
   CacheConfiguration,
   createDefaultConfig,

@@ -1,6 +1,12 @@
 import { InvalidationStrategy } from './cacheStrategies';
 import { ICollectionQuery, Pagination } from '../types';
 
+export enum CacheMode {
+  READ_ONLY = 'read-only',
+  WRITE_THROUGH = 'write-through',
+  READ_WRITE = 'read-write'
+}
+
 export interface WarmupQuery {
   collection: string;
   operation: string;
@@ -105,6 +111,10 @@ export class CacheConfiguration {
     return this.config.defaultTTL;
   }
   
+  get ttlSeconds(): number {
+    return this.config.defaultTTL;
+  }
+  
   get checkInterval(): number {
     return this.config.checkInterval;
   }
@@ -189,6 +199,33 @@ export class CacheConfiguration {
   
   toJSON(): CacheConfig {
     return { ...this.config };
+  }
+  
+  static development(): CacheConfiguration {
+    return new CacheConfiguration({
+      enabled: true,
+      provider: { type: 'memory' },
+      maxEntries: 1000,
+      maxMemoryMB: 50,
+      defaultTTL: 60,
+      checkInterval: 30,
+      enableStats: true,
+      invalidationStrategy: InvalidationStrategy.Smart,
+      debug: true
+    });
+  }
+  
+  static production(): CacheConfiguration {
+    return new CacheConfiguration({
+      enabled: true,
+      provider: { type: 'memory' },
+      maxEntries: 50000,
+      maxMemoryMB: 500,
+      defaultTTL: 600,
+      checkInterval: 120,
+      enableStats: true,
+      invalidationStrategy: InvalidationStrategy.Smart
+    });
   }
   
   static fromEnvironment(): CacheConfiguration {
