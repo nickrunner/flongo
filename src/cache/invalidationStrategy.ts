@@ -25,6 +25,9 @@ export class InvalidationStrategy {
     
     // Clear exists queries that might now return true
     await this.invalidatePattern('exists*');
+    
+    // Execute custom invalidation hooks
+    await this.executeHooks('create', document);
   }
 
   /**
@@ -46,6 +49,9 @@ export class InvalidationStrategy {
     
     // If certain fields are updated, we might need more targeted invalidation
     await this.invalidateAffectedQueries(id, updatedFields);
+    
+    // Execute custom invalidation hooks
+    await this.executeHooks('update', { id, updatedFields });
   }
 
   /**
@@ -61,6 +67,9 @@ export class InvalidationStrategy {
       await this.invalidatePattern('count*');
       await this.invalidatePattern('exists*');
     }
+    
+    // Execute custom invalidation hooks
+    await this.executeHooks('bulkUpdate', { query, updatedFields });
   }
 
   /**
@@ -90,6 +99,9 @@ export class InvalidationStrategy {
     await this.invalidatePattern('getSome*');
     await this.invalidatePattern('getFirst*');
     await this.invalidatePattern('exists*');
+    
+    // Execute custom invalidation hooks
+    await this.executeHooks('delete', { id });
   }
 
   /**
@@ -108,6 +120,9 @@ export class InvalidationStrategy {
     
     // Clear all collection-level queries
     await this.invalidateCollection();
+    
+    // Execute custom invalidation hooks
+    await this.executeHooks('bulkDelete', { ids });
   }
 
   /**

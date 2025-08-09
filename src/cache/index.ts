@@ -58,3 +58,9 @@ export {
   CacheDebugInfo,
   ConsistencyCheckResult
 } from './cacheManager';
+
+export {
+  CacheDebugger,
+  CacheEntryDetails,
+  CacheAnalysisReport
+} from './cacheDebugger';

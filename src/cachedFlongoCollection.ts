@@ -9,6 +9,7 @@ import { CacheStatsCollector } from "./cache/cacheStats";
 import { InvalidationStrategy } from "./cache/invalidationStrategy";
 import { WriteThrough } from "./cache/writeThrough";
 import { CacheManager } from "./cache/cacheManager";
+import { CacheDebugger } from "./cache/cacheDebugger";
 
 /**
  * Extended options for CachedFlongoCollection
@@ -46,6 +47,7 @@ export class CachedFlongoCollection<T> extends FlongoCollection<T> {
   private invalidationStrategy: InvalidationStrategy;
   private writeThrough: WriteThrough<T>;
   private cacheManager: CacheManager;
+  private cacheDebugger: CacheDebugger;
   private cacheEnabled: boolean;
   private cacheMode: CacheMode;
 
@@ -83,6 +85,10 @@ export class CachedFlongoCollection<T> extends FlongoCollection<T> {
       this.cacheStore,
       this.statsCollector,
       this.invalidationStrategy
+    );
+    this.cacheDebugger = new CacheDebugger(
+      this.cacheStore,
+      this.statsCollector
     );
   }
 
@@ -451,6 +457,39 @@ export class CachedFlongoCollection<T> extends FlongoCollection<T> {
       sampleSize,
       async (id) => await super.get(id)
     );
+  }
+
+  /**
+   * Debug cache contents and patterns
+   */
+  async debugCache(): Promise<string> {
+    return await this.cacheDebugger.visualize();
+  }
+
+  /**
+   * Analyze cache for potential issues
+   */
+  async analyzeCacheHealth(): Promise<{
+    analysis: any;
+    memoryLeaks: any;
+  }> {
+    const analysis = await this.cacheDebugger.analyze();
+    const memoryLeaks = await this.cacheDebugger.findMemoryLeaks();
+    return { analysis, memoryLeaks };
+  }
+
+  /**
+   * Monitor cache activity
+   */
+  async monitorCache(durationMs?: number): Promise<any> {
+    return await this.cacheDebugger.monitor(durationMs);
+  }
+
+  /**
+   * Export cache snapshot for debugging
+   */
+  async exportCacheSnapshot(includeValues?: boolean): Promise<any> {
+    return await this.cacheDebugger.exportSnapshot(includeValues);
   }
 
   // ===========================================
