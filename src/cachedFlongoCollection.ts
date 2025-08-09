@@ -111,16 +111,26 @@ export class CachedFlongoCollection<T> extends FlongoCollection<T> {
     });
 
     // Check cache first
-    const cached = await this.cacheStore.get(cacheKey);
-    if (cached) {
-      return cached as Entity & T;
+    try {
+      const cached = await this.cacheStore.get(cacheKey);
+      if (cached) {
+        return cached as Entity & T;
+      }
+    } catch (err) {
+      // Log cache error but continue with database fetch
+      console.warn(`Cache get error for key ${cacheKey}:`, err);
     }
 
     // Cache miss - fetch from database
     const result = await super.get(id);
     
     // Store in cache
-    await this.cacheStore.set(cacheKey, result, this.cacheConfig.ttl);
+    try {
+      await this.cacheStore.set(cacheKey, result, this.cacheConfig.ttl);
+    } catch (err) {
+      // Log cache error but continue
+      console.warn(`Cache set error for key ${cacheKey}:`, err);
+    }
     
     return result;
   }
@@ -144,16 +154,24 @@ export class CachedFlongoCollection<T> extends FlongoCollection<T> {
     });
 
     // Check cache first
-    const cached = await this.cacheStore.get(cacheKey);
-    if (cached) {
-      return cached as (Entity & T)[];
+    try {
+      const cached = await this.cacheStore.get(cacheKey);
+      if (cached) {
+        return cached as (Entity & T)[];
+      }
+    } catch (err) {
+      console.warn(`Cache get error for key ${cacheKey}:`, err);
     }
 
     // Cache miss - fetch from database
     const result = await super.getAll(query, pagination);
     
     // Store in cache
-    await this.cacheStore.set(cacheKey, result, this.cacheConfig.ttl);
+    try {
+      await this.cacheStore.set(cacheKey, result, this.cacheConfig.ttl);
+    } catch (err) {
+      console.warn(`Cache set error for key ${cacheKey}:`, err);
+    }
     
     return result;
   }
@@ -177,16 +195,24 @@ export class CachedFlongoCollection<T> extends FlongoCollection<T> {
     });
 
     // Check cache first
-    const cached = await this.cacheStore.get(cacheKey);
-    if (cached) {
-      return cached as (Entity & T)[];
+    try {
+      const cached = await this.cacheStore.get(cacheKey);
+      if (cached) {
+        return cached as (Entity & T)[];
+      }
+    } catch (err) {
+      console.warn(`Cache get error for key ${cacheKey}:`, err);
     }
 
     // Cache miss - fetch from database
     const result = await super.getSome(query, pagination);
     
     // Store in cache
-    await this.cacheStore.set(cacheKey, result, this.cacheConfig.ttl);
+    try {
+      await this.cacheStore.set(cacheKey, result, this.cacheConfig.ttl);
+    } catch (err) {
+      console.warn(`Cache set error for key ${cacheKey}:`, err);
+    }
     
     return result;
   }
@@ -208,16 +234,24 @@ export class CachedFlongoCollection<T> extends FlongoCollection<T> {
     });
 
     // Check cache first
-    const cached = await this.cacheStore.get(cacheKey);
-    if (cached) {
-      return cached as Entity & T;
+    try {
+      const cached = await this.cacheStore.get(cacheKey);
+      if (cached) {
+        return cached as Entity & T;
+      }
+    } catch (err) {
+      console.warn(`Cache get error for key ${cacheKey}:`, err);
     }
 
     // Cache miss - fetch from database
     const result = await super.getFirst(query);
     
     // Store in cache
-    await this.cacheStore.set(cacheKey, result, this.cacheConfig.ttl);
+    try {
+      await this.cacheStore.set(cacheKey, result, this.cacheConfig.ttl);
+    } catch (err) {
+      console.warn(`Cache set error for key ${cacheKey}:`, err);
+    }
     
     return result;
   }
@@ -239,16 +273,24 @@ export class CachedFlongoCollection<T> extends FlongoCollection<T> {
     });
 
     // Check cache first
-    const cached = await this.cacheStore.get(cacheKey);
-    if (cached !== undefined) {
-      return cached as number;
+    try {
+      const cached = await this.cacheStore.get(cacheKey);
+      if (cached !== undefined) {
+        return cached as number;
+      }
+    } catch (err) {
+      console.warn(`Cache get error for key ${cacheKey}:`, err);
     }
 
     // Cache miss - fetch from database
     const result = await super.count(query);
     
     // Store in cache
-    await this.cacheStore.set(cacheKey, result, this.cacheConfig.ttl);
+    try {
+      await this.cacheStore.set(cacheKey, result, this.cacheConfig.ttl);
+    } catch (err) {
+      console.warn(`Cache set error for key ${cacheKey}:`, err);
+    }
     
     return result;
   }
@@ -270,16 +312,24 @@ export class CachedFlongoCollection<T> extends FlongoCollection<T> {
     });
 
     // Check cache first
-    const cached = await this.cacheStore.get(cacheKey);
-    if (cached !== undefined) {
-      return cached as boolean;
+    try {
+      const cached = await this.cacheStore.get(cacheKey);
+      if (cached !== undefined) {
+        return cached as boolean;
+      }
+    } catch (err) {
+      console.warn(`Cache get error for key ${cacheKey}:`, err);
     }
 
     // Cache miss - fetch from database
     const result = await super.exists(query);
     
     // Store in cache
-    await this.cacheStore.set(cacheKey, result, this.cacheConfig.ttl);
+    try {
+      await this.cacheStore.set(cacheKey, result, this.cacheConfig.ttl);
+    } catch (err) {
+      console.warn(`Cache set error for key ${cacheKey}:`, err);
+    }
     
     return result;
   }
@@ -671,16 +721,24 @@ export class CachedFlongoCollection<T> extends FlongoCollection<T> {
    * @private
    */
   private async invalidateQueryCaches(): Promise<void> {
-    const keys = await this.cacheStore.keys();
-    const queryKeys = keys.filter(key => {
-      const parsed = CacheKeyGenerator.parseKey(key);
-      return parsed.collection === this.collectionName && 
-             parsed.operation && 
-             ['getAll', 'getSome', 'getFirst', 'count', 'exists'].includes(parsed.operation);
-    });
+    try {
+      const keys = await this.cacheStore.keys();
+      const queryKeys = keys.filter(key => {
+        const parsed = CacheKeyGenerator.parseKey(key);
+        return parsed.collection === this.collectionName && 
+               parsed.operation && 
+               ['getAll', 'getSome', 'getFirst', 'count', 'exists'].includes(parsed.operation);
+      });
 
-    for (const key of queryKeys) {
-      await this.cacheStore.delete(key);
+      for (const key of queryKeys) {
+        try {
+          await this.cacheStore.delete(key);
+        } catch (err) {
+          console.warn(`Failed to delete cache key ${key}:`, err);
+        }
+      }
+    } catch (err) {
+      console.warn(`Failed to invalidate query caches:`, err);
     }
   }
 }

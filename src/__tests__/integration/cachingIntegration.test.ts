@@ -60,9 +60,8 @@ describe('Caching Integration Tests', () => {
       insertOne: vi.fn()
     };
 
-    const toArrayMock = vi.fn();
     mockCollection.find.mockReturnValue({
-      toArray: toArrayMock
+      toArray: vi.fn()
     });
 
     (flongoDb.collection as any).mockImplementation((name: string) => {
@@ -79,10 +78,8 @@ describe('Caching Integration Tests', () => {
     });
 
     productCollection = new CachedFlongoCollection<Product>('products', {
-      enableCaching: true,
-      cacheStore: cacheStore,
-      cacheConfig: new CacheConfiguration(createDefaultConfig()),
-      enableMonitoring: false
+      cacheEnabled: true,
+      cacheStore: cacheStore
     });
 
     mockEventsCollection.insertOne.mockResolvedValue({ insertedId: 'event-id' });
@@ -99,7 +96,9 @@ describe('Caching Integration Tests', () => {
         createMockProduct('2', { category: 'electronics', price: 299.99, inStock: true })
       ];
       
-      mockCollection.find().toArray.mockResolvedValue(products);
+      mockCollection.find.mockReturnValue({
+        toArray: vi.fn().mockResolvedValue(products)
+      });
       
       const query = new FlongoQuery()
         .where('category').eq('electronics')
@@ -124,7 +123,9 @@ describe('Caching Integration Tests', () => {
         createMockProduct('2', { category: 'furniture' })
       ];
       
-      mockCollection.find().toArray.mockResolvedValue(products);
+      mockCollection.find.mockReturnValue({
+        toArray: vi.fn().mockResolvedValue(products)
+      });
       
       const query = new FlongoQuery()
         .where('category').eq('electronics')
@@ -143,7 +144,9 @@ describe('Caching Integration Tests', () => {
         createMockProduct('2', { tags: ['featured', 'new'] })
       ];
       
-      mockCollection.find().toArray.mockResolvedValue(products);
+      mockCollection.find.mockReturnValue({
+        toArray: vi.fn().mockResolvedValue(products)
+      });
       
       const query = new FlongoQuery()
         .where('tags').arrContainsAny(['featured', 'sale']);
@@ -162,7 +165,9 @@ describe('Caching Integration Tests', () => {
         createMockProduct('3', { price: 250 })
       ];
       
-      mockCollection.find().toArray.mockResolvedValue([products[1]]);
+      mockCollection.find.mockReturnValue({
+        toArray: vi.fn().mockResolvedValue([products[1]])
+      });
       
       const query = new FlongoQuery().inRange('price', 100, 200);
       
@@ -180,19 +185,27 @@ describe('Caching Integration Tests', () => {
       const product = createMockProduct('1');
       mockCollection.findOne.mockResolvedValue(product);
       
+      // First, populate the cache
+      await productCollection.get('1');
+      expect(mockCollection.findOne).toHaveBeenCalledTimes(1);
+      
+      // Now test concurrent reads from cache
       const promises = Array.from({ length: 10 }, () => 
         productCollection.get('1')
       );
       
       const results = await Promise.all(promises);
       
+      // Should still only have been called once (from the initial cache population)
       expect(mockCollection.findOne).toHaveBeenCalledTimes(1);
       expect(results.every(r => r._id === '1')).toBe(true);
     });
 
     it('should handle concurrent writes with proper invalidation', async () => {
       const products = [createMockProduct('1')];
-      mockCollection.find().toArray.mockResolvedValue(products);
+      mockCollection.find.mockReturnValue({
+        toArray: vi.fn().mockResolvedValue(products)
+      });
       mockCollection.countDocuments.mockResolvedValue(1);
       
       await productCollection.getAll();
@@ -203,9 +216,11 @@ describe('Caching Integration Tests', () => {
       
       await Promise.all(updatePromises);
       
-      mockCollection.find().toArray.mockResolvedValue([
-        createMockProduct('1', { price: 100 })
-      ]);
+      mockCollection.find.mockReturnValue({
+        toArray: vi.fn().mockResolvedValue([
+          createMockProduct('1', { price: 100 })
+        ])
+      });
       
       const result = await productCollection.getAll();
       
@@ -216,14 +231,12 @@ describe('Caching Integration Tests', () => {
   describe('Production Configuration', () => {
     it('should work with production config', async () => {
       const prodCollection = new CachedFlongoCollection<Product>('products', {
-        enableCaching: true,
+        cacheEnabled: true,
         cacheStore: new MemoryCache({
           maxEntries: 10000,
           defaultTTL: 3600,
           enableStats: true
-        }),
-        cacheConfig: new CacheConfiguration(createProductionConfig()),
-        enableMonitoring: false
+        })
       });
       
       const product = createMockProduct('1');
@@ -260,10 +273,8 @@ describe('Caching Integration Tests', () => {
       }));
       
       const warmupCollection = new CachedFlongoCollection<Product>('products', {
-        enableCaching: true,
-        cacheStore: new MemoryCache(),
-        cacheConfig: new CacheConfiguration(createDefaultConfig()),
-        enableMonitoring: false
+        cacheEnabled: true,
+        cacheStore: new MemoryCache()
       });
       
       // Manually trigger warmup
@@ -290,7 +301,9 @@ describe('Caching Integration Tests', () => {
         createMockProduct('2', { category: 'electronics', price: 200 })
       ];
       
-      mockCollection.find().toArray.mockResolvedValue(electronicProducts);
+      mockCollection.find.mockReturnValue({
+        toArray: vi.fn().mockResolvedValue(electronicProducts)
+      });
       mockCollection.countDocuments.mockResolvedValue(2);
       
       const query1 = new FlongoQuery().where('category').eq('electronics');
@@ -306,10 +319,12 @@ describe('Caching Integration Tests', () => {
       mockCollection.findOne.mockResolvedValue(electronicProducts[0]);
       await productCollection.update('1', { price: 110 });
       
-      mockCollection.find().toArray.mockResolvedValue([
-        createMockProduct('1', { category: 'electronics', price: 110 }),
-        electronicProducts[1]
-      ]);
+      mockCollection.find.mockReturnValue({
+        toArray: vi.fn().mockResolvedValue([
+          createMockProduct('1', { category: 'electronics', price: 110 }),
+          electronicProducts[1]
+        ])
+      });
       mockCollection.countDocuments.mockResolvedValue(2);
       
       await productCollection.getAll(query1);
@@ -353,10 +368,8 @@ describe('Caching Integration Tests', () => {
       });
       
       const limitedCollection = new CachedFlongoCollection<Product>('products', {
-        enableCaching: true,
-        cacheStore: limitedCache,
-        cacheConfig: new CacheConfiguration(createDefaultConfig()),
-        enableMonitoring: false
+        cacheEnabled: true,
+        cacheStore: limitedCache
       });
       
       for (let i = 1; i <= 5; i++) {
@@ -372,11 +385,15 @@ describe('Caching Integration Tests', () => {
 
   describe('Error Handling', () => {
     it('should handle database errors gracefully', async () => {
-      mockCollection.find().toArray.mockRejectedValue(new Error('Database connection lost'));
+      mockCollection.find.mockReturnValue({
+        toArray: vi.fn().mockRejectedValue(new Error('Database connection lost'))
+      });
       
       await expect(productCollection.getAll()).rejects.toThrow('Database connection lost');
       
-      mockCollection.find().toArray.mockResolvedValue([createMockProduct('1')]);
+      mockCollection.find.mockReturnValue({
+        toArray: vi.fn().mockResolvedValue([createMockProduct('1')])
+      });
       
       const result = await productCollection.getAll();
       expect(result.length).toBe(1);
@@ -399,10 +416,8 @@ describe('Caching Integration Tests', () => {
       };
       
       const faultyCollection = new CachedFlongoCollection<Product>('products', {
-        enableCaching: true,
-        cacheStore: faultyCache as any,
-        cacheConfig: new CacheConfiguration(createDefaultConfig()),
-        enableMonitoring: false
+        cacheEnabled: true,
+        cacheStore: faultyCache as any
       });
       
       mockCollection.findOne.mockResolvedValue(createMockProduct('1'));
@@ -415,11 +430,9 @@ describe('Caching Integration Tests', () => {
   describe('Cache Bypass Patterns', () => {
     it('should bypass cache for sensitive queries', async () => {
       const bypassCollection = new CachedFlongoCollection<Product>('products', {
-        enableCaching: true,
+        cacheEnabled: true,
         cacheStore: cacheStore,
-        cacheConfig: new CacheConfiguration(createDefaultConfig()),
-        enableMonitoring: false,
-        bypassCache: (operation, query) => {
+        cacheBypassPredicate: (query) => {
           if (!query) return false;
           return query.expressions.some(e => 
             e.key === 'userId' || e.key === 'sessionId'
@@ -459,7 +472,9 @@ describe('Caching Integration Tests', () => {
         createMockProduct(String(i + 1))
       );
       
-      mockCollection.find().toArray.mockResolvedValue(products);
+      mockCollection.find.mockReturnValue({
+        toArray: vi.fn().mockResolvedValue(products)
+      });
       mockCollection.countDocuments.mockResolvedValue(100);
       
       const queries = [

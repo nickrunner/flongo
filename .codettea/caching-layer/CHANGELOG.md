@@ -54,3 +54,8 @@
 - Added automatic cache invalidation on all write operations
 - Implemented cache warmup, bypass predicates, and management APIs
 
+### Issue #3 - 2025-08-09
+- Implemented CachedFlongoCollection with read-through caching
+- Added resilient error handling for cache failures
+- Fixed integration test configurations for proper cache testing
+
