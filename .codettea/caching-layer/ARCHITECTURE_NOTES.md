@@ -36,22 +36,22 @@ The caching layer provides a transparent, high-performance cache for MongoDB ope
 ## Implementation Status
 
 ### Phase 1: Core Cache Infrastructure ✅ COMPLETED
-- ✅ Cache store interface (`CacheStore`, `BaseCacheStore`)
-- ✅ Memory cache implementation (`MemoryCache`) with:
+- ✅ Cache store interface (, )
+- ✅ Memory cache implementation () with:
   - Thread-safe operations using lock mechanism
   - LRU eviction with configurable max entries
   - TTL support with automatic expiration
   - Memory limit enforcement
-- ✅ Cache key generation (`CacheKeyGenerator`) with:
+- ✅ Cache key generation () with:
   - Deterministic hashing of queries
   - Query normalization for consistent keys
   - Collection and operation namespacing
-- ✅ Configuration system (`CacheConfiguration`) with:
+- ✅ Configuration system () with:
   - Environment variable support
   - Preset configurations (dev/prod)
   - Validation and type safety
-- ✅ Statistics and monitoring (`CacheStatsCollector`, `CacheMonitor`)
-- ✅ Invalidation strategies (`CacheInvalidator`, `TTLStrategy`, `LRUStrategy`)
+- ✅ Statistics and monitoring (, )
+- ✅ Invalidation strategies (, , )
 
 
 ### Phase 2: Read-Through Caching ✅ COMPLETED
@@ -97,42 +97,92 @@ The caching layer provides a transparent, high-performance cache for MongoDB ope
   - setCachingEnabled() - dynamic enable/disable
 
 ## Configuration Example
-```typescript
-import { CachedFlongoCollection, CacheConfiguration, MemoryCache } from 'flongo';
 
-// Simple configuration
-const collection = new CachedFlongoCollection<User>('users', {
-  enableCaching: true
-});
 
-// Advanced configuration
-const advancedCollection = new CachedFlongoCollection<User>('users', {
-  enableCaching: true,
-  cacheConfig: new CacheConfiguration({
-    defaultTTL: 300,
-    maxEntries: 10000,
-    enableStats: true,
-    customTTLs: {
-      get: 600,
-      getAll: 300,
-      count: 120
-    }
-  }),
-  cacheStore: new MemoryCache({
-    maxEntries: 10000,
-    defaultTTL: 300,
-    enableStats: true
-  }),
-  warmupQueries: [
-    { query: new FlongoQuery().where('status').eq('active') },
-    { query: new FlongoQuery().where('featured').eq(true) }
-  ],
-  bypassCache: (operation, query) => {
-    // Skip caching for user-specific queries
-    return query?.expressions.some(e => e.key === 'userId');
-  }
-});
-```
+## Key Benefits
+1. **10-100x performance improvement** for cached queries
+2. **Zero code changes** for existing Flongo users
+3. **Configurable and flexible** per collection needs
+4. **Production-ready** with monitoring and debugging
+5. **Extensible** for custom cache providers
+
+## Testing Strategy
+- Unit tests for each cache component
+- Integration tests with MongoDB operations
+- Performance benchmarks comparing cached vs uncached
+- Edge case coverage (concurrent updates, invalidation races)
+- Backward compatibility verification
+
+# Caching Layer Architecture for Flongo
+
+## Overview
+The caching layer provides a transparent, high-performance cache for MongoDB operations in Flongo. It's designed as a drop-in replacement for FlongoCollection with zero breaking changes.
+
+## Architecture Decisions
+
+### 1. Cache Store Abstraction
+- **Interface-based design**: Allows swapping cache providers (memory, Redis, Memcached)
+- **In-memory default**: Ships with built-in memory cache, no external dependencies
+- **Pluggable providers**: Users can implement custom cache stores
+
+### 2. Cache Key Generation
+- **Deterministic keys**: Generated from FlongoQuery objects including all parameters
+- **Query normalization**: Ensures equivalent queries generate same keys
+- **Collection namespacing**: Prevents key collisions across collections
+
+### 3. Cache Invalidation Strategy
+- **Smart invalidation**: Only clears affected queries on mutations
+- **Write-through**: Updates cache simultaneously with database writes
+- **TTL-based expiry**: Configurable time-to-live per collection
+- **LRU eviction**: Memory-bounded with least-recently-used eviction
+
+### 4. API Compatibility
+- **CachedFlongoCollection**: Extends FlongoCollection, maintains full API
+- **Transparent operation**: No code changes required for consumers
+- **Configuration-driven**: Enable/disable caching via constructor options
+- **Backward compatible**: Existing code works without modifications
+
+### 5. Performance Considerations
+- **Sub-millisecond cache ops**: Memory cache provides <1ms response
+- **Lazy invalidation**: Defers cleanup until necessary
+- **Batch optimization**: Groups cache updates for batch operations
+- **Configurable limits**: Memory usage caps, entry limits, TTL settings
+
+## Implementation Status
+
+### Phase 1: Core Cache Infrastructure ✅ COMPLETED
+- ✅ Cache store interface (, )
+- ✅ Memory cache implementation () with:
+  - Thread-safe operations using lock mechanism
+  - LRU eviction with configurable max entries
+  - TTL support with automatic expiration
+  - Memory limit enforcement
+- ✅ Cache key generation () with:
+  - Deterministic hashing of queries
+  - Query normalization for consistent keys
+  - Collection and operation namespacing
+- ✅ Configuration system () with:
+  - Environment variable support
+  - Preset configurations (dev/prod)
+  - Validation and type safety
+- ✅ Statistics and monitoring (, )
+- ✅ Invalidation strategies (, , )
+
+
+### Phase 2: Read-Through Caching
+- CachedFlongoCollection wrapper class
+- Query result caching for all read methods
+- Cache warmup and preloading
+- Statistics and monitoring
+
+### Phase 3: Write-Through & Invalidation
+- Mutation cache updates
+- Smart query invalidation
+- Consistency guarantees
+- Management APIs and debugging tools
+
+## Configuration Example
+
 
 ## Key Benefits
 1. **10-100x performance improvement** for cached queries

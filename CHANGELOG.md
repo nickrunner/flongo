@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/nickrunner/flongo/compare/v1.0.2...v1.1.0) (2025-08-09)
+
+
+### Features
+
+* **#2:** caching-layer - Step 1: Core Cache Implementation and Strategy System ([#6](https://github.com/nickrunner/flongo/issues/6)) ([72be8af](https://github.com/nickrunner/flongo/commit/72be8af19fca1b67442be6b3c8fc8af668274e3a)), closes [#2](https://github.com/nickrunner/flongo/issues/2) [#2](https://github.com/nickrunner/flongo/issues/2) [#2](https://github.com/nickrunner/flongo/issues/2) [#2](https://github.com/nickrunner/flongo/issues/2) [#2](https://github.com/nickrunner/flongo/issues/2) [#2](https://github.com/nickrunner/flongo/issues/2) [#2](https://github.com/nickrunner/flongo/issues/2) [#2](https://github.com/nickrunner/flongo/issues/2) [#2](https://github.com/nickrunner/flongo/issues/2)
+
 ## [1.0.2](https://github.com/nickrunner/flongo/compare/v1.0.1...v1.0.2) (2025-08-03)
 
 

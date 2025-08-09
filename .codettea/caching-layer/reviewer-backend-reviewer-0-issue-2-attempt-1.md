@@ -105,7 +105,6 @@ Your review response must follow this exact format for the orchestrator to parse
 
 ```
 ## ❌ REJECT
-**REWORK_REQUIRED**: [Brief reason for rejection]
 
 ### Critical Issues
 [List specific issues requiring fixes]
@@ -124,8 +123,6 @@ Please address critical issues above. Focus on:
 ```
 
 **IMPORTANT**:
-
-Return either ❌ REJECT or ✅ APPROVE. Do not return both! Do not return neither!
 
 - Do NOT execute any `gh` commands - the orchestrator handles GitHub integration
 - Your response will be parsed to determine APPROVE/REJECT and extract comments
