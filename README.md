@@ -156,6 +156,66 @@ const collection = new FlongoCollection<User>('users', {
 });
 ```
 
+### Caching with CachedFlongoCollection
+
+CachedFlongoCollection provides transparent read-through caching for all read operations, significantly improving performance for frequently accessed data.
+
+```typescript
+import { CachedFlongoCollection, MemoryCache } from 'flongo';
+
+// Create a cached collection with default settings
+const users = new CachedFlongoCollection<User>('users', {
+  cache: {
+    enabled: true
+  }
+});
+
+// Custom cache configuration
+const products = new CachedFlongoCollection<Product>('products', {
+  cache: {
+    enabled: true,
+    store: new MemoryCache({
+      maxEntries: 10000,
+      defaultTTL: 3600 // 1 hour
+    }),
+    // Warmup frequently accessed data on startup
+    warmup: [
+      { query: new FlongoQuery().where('featured').eq(true) },
+      { query: new FlongoQuery().where('category').eq('bestsellers') }
+    ],
+    // Bypass cache for sensitive queries
+    bypassPatterns: [
+      (query) => query?.expressions.some(e => e.key === 'userId')
+    ]
+  }
+});
+
+// All read operations are automatically cached
+const user = await users.get('user123'); // First call hits DB
+const user2 = await users.get('user123'); // Second call uses cache
+
+// Cache is automatically invalidated on writes
+await users.update('user123', { name: 'Updated Name' });
+const user3 = await users.get('user123'); // Cache refreshed from DB
+
+// Manual cache management
+await users.clearCache(); // Clear all cached entries
+await users.invalidateCache('*:getAll:*'); // Selective invalidation
+const stats = await users.getCacheStats(); // Monitor cache performance
+```
+
+#### Key Features of CachedFlongoCollection
+
+- **Drop-in replacement**: Fully compatible with FlongoCollection API
+- **Automatic caching**: All read operations (get, getAll, getSome, getFirst, count, exists) are cached
+- **Smart invalidation**: Cache is automatically invalidated on write operations
+- **Query normalization**: Consistent cache keys regardless of query parameter order
+- **Cache warmup**: Pre-load frequently accessed data on initialization
+- **Bypass patterns**: Skip caching for specific query patterns (e.g., user-specific data)
+- **Performance monitoring**: Built-in statistics for cache hits, misses, and evictions
+- **Configurable TTL**: Set different expiration times per operation type
+- **Memory management**: Automatic eviction when cache size limits are reached
+
 ## Examples
 
 ### E-commerce Product Search
