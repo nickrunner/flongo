@@ -1,3 +1,10 @@
+# [1.2.0](https://github.com/nickrunner/flongo/compare/v1.1.0...v1.2.0) (2025-12-07)
+
+
+### Features
+
+* added elemMatch support ([11fae0a](https://github.com/nickrunner/flongo/commit/11fae0aed0e194332e8884677a9ea8d1c317bc61))
+
 # [1.1.0](https://github.com/nickrunner/flongo/compare/v1.0.2...v1.1.0) (2025-08-09)
 
 
