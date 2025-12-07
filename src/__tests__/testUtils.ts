@@ -1,5 +1,5 @@
-import { vi } from 'vitest';
-import type { Collection, Db, MongoClient } from 'mongodb';
+import { vi } from "vitest";
+import type { Collection, Db, MongoClient } from "mongodb";
 
 // Mock MongoDB collection methods
 export const createMockCollection = () => {
@@ -25,7 +25,7 @@ export const createMockCollection = () => {
 // Mock MongoDB database
 export const createMockDb = () => {
   const mockCollection = createMockCollection();
-  
+
   return {
     collection: vi.fn(() => mockCollection)
   } as any;
@@ -34,7 +34,7 @@ export const createMockDb = () => {
 // Mock MongoDB client
 export const createMockClient = () => {
   const mockDb = createMockDb();
-  
+
   return {
     db: vi.fn(() => mockDb)
   } as any;
@@ -47,28 +47,30 @@ export interface TestUser {
   age: number;
   tags: string[];
   isActive: boolean;
+  loginCount?: number;
+  credits?: number; // Optional field for credits
 }
 
 export const sampleUsers: TestUser[] = [
   {
-    name: 'John Doe',
-    email: 'john@example.com',
+    name: "John Doe",
+    email: "john@example.com",
     age: 30,
-    tags: ['developer', 'typescript'],
+    tags: ["developer", "typescript"],
     isActive: true
   },
   {
-    name: 'Jane Smith',
-    email: 'jane@example.com',
+    name: "Jane Smith",
+    email: "jane@example.com",
     age: 25,
-    tags: ['designer', 'frontend'],
+    tags: ["designer", "frontend"],
     isActive: true
   },
   {
-    name: 'Bob Johnson',
-    email: 'bob@example.com',
+    name: "Bob Johnson",
+    email: "bob@example.com",
     age: 35,
-    tags: ['manager', 'backend'],
+    tags: ["manager", "backend"],
     isActive: false
   }
 ];
@@ -76,13 +78,13 @@ export const sampleUsers: TestUser[] = [
 export const sampleUsersWithIds = sampleUsers.map((user, index) => ({
   ...user,
   _id: `507f1f77bcf86cd79943901${index}`,
-  createdAt: Date.now() - (index * 1000),
-  updatedAt: Date.now() - (index * 500)
+  createdAt: Date.now() - index * 1000,
+  updatedAt: Date.now() - index * 500
 }));
 
 // Helper to create expected MongoDB query
 export const expectMongoQuery = (expectedQuery: any) => {
-  const { expect } = require('vitest');
+  const { expect } = require("vitest");
   return expect.objectContaining(expectedQuery);
 };
 
@@ -90,14 +92,14 @@ export const expectMongoQuery = (expectedQuery: any) => {
 export const mockFlongoDb = () => {
   const mockCollection = createMockCollection();
   const mockDb = createMockDb();
-  
+
   // Mock the flongo module
-  vi.doMock('../flongo', () => ({
+  vi.doMock("../flongo", () => ({
     flongoDb: mockDb,
     flongoClient: createMockClient(),
     initializeFlongo: vi.fn(),
     FlongoConfig: {}
   }));
-  
+
   return { mockDb, mockCollection };
 };

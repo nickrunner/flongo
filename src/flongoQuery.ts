@@ -207,6 +207,37 @@ export class FlongoQuery implements ICollectionQuery {
     return val?.length ? this.set("$in", val) : this.handleEmptyValue();
   }
 
+  /**
+   * Matches array elements that satisfy all specified conditions.
+   * Use this to query objects within arrays by their properties.
+   *
+   * @example
+   * // Find users with a contextRole where orgId is 'org1'
+   * query.where('contextRoles').elemMatch({ orgId: 'org1' })
+   *
+   * @example
+   * // Find users with a contextRole where orgId is 'org1' AND role is 'admin'
+   * query.where('contextRoles').elemMatch({ orgId: 'org1', role: 'admin' })
+   *
+   * @example
+   * // Using fluent API for conditions (supports all FlongoQuery operators)
+   * query.where('contextRoles').elemMatch(
+   *   new FlongoQuery().where('orgId').eq('org1').and('role').eq('admin')
+   * )
+   *
+   * @example
+   * // Using comparison operators
+   * query.where('scores').elemMatch(
+   *   new FlongoQuery().where('value').gtEq(80).and('subject').eq('math')
+   * )
+   *
+   * @param conditions - Object with field/value pairs or a FlongoQuery instance
+   * @returns This query instance for chaining
+   */
+  public elemMatch(conditions?: Record<string, any> | FlongoQuery): FlongoQuery {
+    return this.set("$elemMatch", conditions);
+  }
+
   // ===========================================
   // STRING OPERATORS
   // ===========================================
@@ -417,11 +448,23 @@ export class FlongoQuery implements ICollectionQuery {
           }
 
           // Build query object for non-_id fields
-          const fieldValue = expression.op
-            ? expression.op === "$regex"
-              ? { [expression.op]: expression.val, ["$options"]: "i" } // Case-insensitive regex
-              : { [expression.op]: expression.val }
-            : expression.val; // Direct value assignment for simple equality
+          let fieldValue: any;
+          if (!expression.op) {
+            // Direct value assignment for simple equality (arrContains)
+            fieldValue = expression.val;
+          } else if (expression.op === "$regex") {
+            // Case-insensitive regex
+            fieldValue = { [expression.op]: expression.val, ["$options"]: "i" };
+          } else if (expression.op === "$elemMatch") {
+            // Handle FlongoQuery or raw object for $elemMatch
+            fieldValue = {
+              [expression.op]:
+                expression.val instanceof FlongoQuery ? expression.val.build() : expression.val
+            };
+          } else {
+            // Standard operator
+            fieldValue = { [expression.op]: expression.val };
+          }
 
           // Merge operators for the same field (e.g., range queries)
           if (
