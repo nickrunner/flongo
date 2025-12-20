@@ -254,6 +254,7 @@ export class FlongoCollection<T> {
       // Insert document with automatic timestamps
       const created = await this.collection.insertOne({
         ...attributes,
+        createdBy: clientId,
         createdAt: Date.now(),
         updatedAt: Date.now()
       } as OptionalUnlessRequiredId<Entity & T>);
@@ -291,6 +292,7 @@ export class FlongoCollection<T> {
       (attribute) =>
         ({
           ...attribute,
+          createdBy: clientId,
           createdAt: now,
           updatedAt: now
         } as OptionalUnlessRequiredId<Entity & T>)
@@ -324,6 +326,7 @@ export class FlongoCollection<T> {
     await this.collection.updateMany(mongodbQuery, {
       $set: {
         updatedAt: Date.now(),
+        updatedBy: clientId,
         ...attributes
       }
     });
@@ -353,6 +356,7 @@ export class FlongoCollection<T> {
       await this.collection.updateOne({ _id: new ObjectId(id) } as any, {
         $set: {
           updatedAt: Date.now(),
+          updatedBy: clientId,
           ...attributes
         }
       });
@@ -382,6 +386,7 @@ export class FlongoCollection<T> {
     const update = {
       $set: {
         updatedAt: Date.now(),
+        updatedBy: clientId,
         ...attributes
       }
     };
@@ -404,10 +409,16 @@ export class FlongoCollection<T> {
    * @param id - Document ID
    * @param key - Field name to increment
    * @param amt - Amount to increment by (defaults to 1)
+   * @param clientId - Optional client ID for audit trail
    */
-  async increment(id: string, key: string, amt?: number): Promise<void> {
-    const inc: any = { $inc: { [key]: amt || 1 } };
-    await this.collection.updateOne({ _id: new ObjectId(id) } as any, inc);
+  async increment(id: string, key: string, amt?: number, clientId?: string): Promise<void> {
+    await this.collection.updateOne(
+      { _id: new ObjectId(id) } as any,
+      {
+        $inc: { [key]: amt || 1 },
+        $set: { updatedAt: Date.now(), updatedBy: clientId }
+      } as any
+    );
   }
 
   /**
@@ -415,11 +426,15 @@ export class FlongoCollection<T> {
    * @param id - Document ID
    * @param key - Field name to decrement
    * @param amt - Amount to decrement by (defaults to 1)
+   * @param clientId - Optional client ID for audit trail
    */
-  async decrement(id: string, key: string, amt?: number): Promise<void> {
+  async decrement(id: string, key: string, amt?: number, clientId?: string): Promise<void> {
     await this.collection.updateOne(
       { _id: new ObjectId(id) } as any,
-      { $inc: { [key]: -(amt ?? 1) } } as any
+      {
+        $inc: { [key]: -(amt ?? 1) },
+        $set: { updatedAt: Date.now(), updatedBy: clientId }
+      } as any
     );
   }
 
@@ -428,11 +443,16 @@ export class FlongoCollection<T> {
    * @param id - Document ID
    * @param key - Array field name
    * @param items - Items to append to the array
+   * @param clientId - Optional client ID for audit trail
    */
-  async append(id: string, key: string, items: any[]): Promise<void> {
-    await this.collection.updateOne({ _id: new ObjectId(id) } as any, {
-      $push: { [key]: { $each: items } } as any
-    });
+  async append(id: string, key: string, items: any[], clientId?: string): Promise<void> {
+    await this.collection.updateOne(
+      { _id: new ObjectId(id) } as any,
+      {
+        $push: { [key]: { $each: items } },
+        $set: { updatedAt: Date.now(), updatedBy: clientId }
+      } as any
+    );
   }
 
   /**
@@ -440,11 +460,15 @@ export class FlongoCollection<T> {
    * @param id - Document ID
    * @param key - Array field name
    * @param items - Items to remove from the array
+   * @param clientId - Optional client ID for audit trail
    */
-  async arrRemove(id: string, key: string, items: any[]): Promise<void> {
+  async arrRemove(id: string, key: string, items: any[], clientId?: string): Promise<void> {
     await this.collection.updateOne(
       { _id: new ObjectId(id) } as any,
-      { $pull: { [key]: { $in: items } } } as any
+      {
+        $pull: { [key]: { $in: items } },
+        $set: { updatedAt: Date.now(), updatedBy: clientId }
+      } as any
     );
   }
 

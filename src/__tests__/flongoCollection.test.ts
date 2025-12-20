@@ -300,6 +300,7 @@ describe('FlongoCollection', () => {
 
         expect(mockCollection.insertOne).toHaveBeenCalledWith({
           ...newUser,
+          createdBy: 'client123',
           createdAt: expect.any(Number),
           updatedAt: expect.any(Number)
         });
@@ -340,11 +341,13 @@ describe('FlongoCollection', () => {
           expect.arrayContaining([
             expect.objectContaining({
               ...newUsers[0],
+              createdBy: 'client123',
               createdAt: expect.any(Number),
               updatedAt: expect.any(Number)
             }),
             expect.objectContaining({
               ...newUsers[1],
+              createdBy: 'client123',
               createdAt: expect.any(Number),
               updatedAt: expect.any(Number)
             })
@@ -385,6 +388,7 @@ describe('FlongoCollection', () => {
           {
             $set: {
               updatedAt: expect.any(Number),
+              updatedBy: 'client123',
               ...updates
             }
           }
@@ -444,6 +448,7 @@ describe('FlongoCollection', () => {
           {
             $set: {
               updatedAt: expect.any(Number),
+              updatedBy: 'client123',
               ...updates
             }
           }
@@ -461,6 +466,7 @@ describe('FlongoCollection', () => {
           {
             $set: {
               updatedAt: expect.any(Number),
+              updatedBy: undefined,
               ...updates
             }
           }
@@ -473,7 +479,7 @@ describe('FlongoCollection', () => {
         const updates = { name: 'Updated Name' };
         const query = new FlongoQuery().where('isActive').eq(true);
         const updatedUser = sampleUsersWithIds[0];
-        
+
         mockCollection.findOneAndUpdate.mockResolvedValue(updatedUser);
 
         const result = await collection.updateFirst(updates, query, 'client123');
@@ -483,6 +489,7 @@ describe('FlongoCollection', () => {
           {
             $set: {
               updatedAt: expect.any(Number),
+              updatedBy: 'client123',
               ...updates
             }
           }
@@ -508,7 +515,10 @@ describe('FlongoCollection', () => {
 
         expect(mockCollection.updateOne).toHaveBeenCalledWith(
           { _id: expect.any(Object) },
-          { $inc: { loginCount: 1 } }
+          {
+            $inc: { loginCount: 1 },
+            $set: { updatedAt: expect.any(Number), updatedBy: undefined }
+          }
         );
       });
 
@@ -519,7 +529,24 @@ describe('FlongoCollection', () => {
 
         expect(mockCollection.updateOne).toHaveBeenCalledWith(
           { _id: expect.any(Object) },
-          { $inc: { score: 10 } }
+          {
+            $inc: { score: 10 },
+            $set: { updatedAt: expect.any(Number), updatedBy: undefined }
+          }
+        );
+      });
+
+      it('should set updatedBy when clientId provided', async () => {
+        mockCollection.updateOne.mockResolvedValue({});
+
+        await collection.increment('507f1f77bcf86cd799439010', 'loginCount', 1, 'client123');
+
+        expect(mockCollection.updateOne).toHaveBeenCalledWith(
+          { _id: expect.any(Object) },
+          {
+            $inc: { loginCount: 1 },
+            $set: { updatedAt: expect.any(Number), updatedBy: 'client123' }
+          }
         );
       });
     });
@@ -532,7 +559,10 @@ describe('FlongoCollection', () => {
 
         expect(mockCollection.updateOne).toHaveBeenCalledWith(
           { _id: expect.any(Object) },
-          { $inc: { credits: -1 } }
+          {
+            $inc: { credits: -1 },
+            $set: { updatedAt: expect.any(Number), updatedBy: undefined }
+          }
         );
       });
 
@@ -543,7 +573,24 @@ describe('FlongoCollection', () => {
 
         expect(mockCollection.updateOne).toHaveBeenCalledWith(
           { _id: expect.any(Object) },
-          { $inc: { credits: -5 } }
+          {
+            $inc: { credits: -5 },
+            $set: { updatedAt: expect.any(Number), updatedBy: undefined }
+          }
+        );
+      });
+
+      it('should set updatedBy when clientId provided', async () => {
+        mockCollection.updateOne.mockResolvedValue({});
+
+        await collection.decrement('507f1f77bcf86cd799439010', 'credits', 1, 'client123');
+
+        expect(mockCollection.updateOne).toHaveBeenCalledWith(
+          { _id: expect.any(Object) },
+          {
+            $inc: { credits: -1 },
+            $set: { updatedAt: expect.any(Number), updatedBy: 'client123' }
+          }
         );
       });
     });
@@ -557,9 +604,22 @@ describe('FlongoCollection', () => {
         expect(mockCollection.updateOne).toHaveBeenCalledWith(
           { _id: expect.any(Object) },
           {
-            $push: {
-              tags: { $each: ['new-tag', 'another-tag'] }
-            }
+            $push: { tags: { $each: ['new-tag', 'another-tag'] } },
+            $set: { updatedAt: expect.any(Number), updatedBy: undefined }
+          }
+        );
+      });
+
+      it('should set updatedBy when clientId provided', async () => {
+        mockCollection.updateOne.mockResolvedValue({});
+
+        await collection.append('507f1f77bcf86cd799439010', 'tags', ['new-tag'], 'client123');
+
+        expect(mockCollection.updateOne).toHaveBeenCalledWith(
+          { _id: expect.any(Object) },
+          {
+            $push: { tags: { $each: ['new-tag'] } },
+            $set: { updatedAt: expect.any(Number), updatedBy: 'client123' }
           }
         );
       });
@@ -574,9 +634,22 @@ describe('FlongoCollection', () => {
         expect(mockCollection.updateOne).toHaveBeenCalledWith(
           { _id: expect.any(Object) },
           {
-            $pull: {
-              tags: { $in: ['old-tag'] }
-            }
+            $pull: { tags: { $in: ['old-tag'] } },
+            $set: { updatedAt: expect.any(Number), updatedBy: undefined }
+          }
+        );
+      });
+
+      it('should set updatedBy when clientId provided', async () => {
+        mockCollection.updateOne.mockResolvedValue({});
+
+        await collection.arrRemove('507f1f77bcf86cd799439010', 'tags', ['old-tag'], 'client123');
+
+        expect(mockCollection.updateOne).toHaveBeenCalledWith(
+          { _id: expect.any(Object) },
+          {
+            $pull: { tags: { $in: ['old-tag'] } },
+            $set: { updatedAt: expect.any(Number), updatedBy: 'client123' }
           }
         );
       });
