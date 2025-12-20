@@ -13,7 +13,7 @@
     "test:coverage": "vitest --coverage",
     "lint": "echo 'Linting not configured yet'",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build && npm test",
+    "prepublishOnly": "npm run build && vitest --run",
     "semantic-release": "semantic-release"
   },
   "keywords": [
