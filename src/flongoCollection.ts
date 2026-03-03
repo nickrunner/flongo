@@ -282,8 +282,8 @@ export class FlongoCollection<T> {
    * @param attributes - Array of document data
    * @param clientId - Optional client ID for audit trail
    */
-  async batchCreate(attributes: T[], clientId?: string): Promise<void> {
-    if (attributes.length === 0) return;
+  async batchCreate(attributes: T[], clientId?: string): Promise<string[]> {
+    if (attributes.length === 0) return [];
 
     const now = Date.now();
 
@@ -299,7 +299,7 @@ export class FlongoCollection<T> {
     );
 
     // Insert all entities at once
-    await this.collection.insertMany(entities);
+    const result = await this.collection.insertMany(entities);
 
     // Log batch creation event
     this.logEvent<EventName.BatchCreateEntities>({
@@ -307,6 +307,8 @@ export class FlongoCollection<T> {
       identity: clientId,
       value: { collectionType: this.name, count: await this.count() }
     });
+
+    return Object.values(result.insertedIds).map((id) => id.toString());
   }
 
   // ===========================================

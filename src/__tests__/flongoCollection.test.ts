@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi, MockedFunction } from 'vitest';
+import { ObjectId } from 'mongodb';
 import { FlongoCollection } from '../flongoCollection';
 import { FlongoQuery } from '../flongoQuery';
 import { EventName } from '../types';
@@ -327,15 +328,22 @@ describe('FlongoCollection', () => {
     });
 
     describe('batchCreate', () => {
-      it('should create multiple documents', async () => {
+      it('should create multiple documents and return ids', async () => {
         const newUsers = sampleUsers.slice(0, 2);
-        mockCollection.insertMany.mockResolvedValue({});
+        mockCollection.insertMany.mockResolvedValue({
+          insertedIds: { 0: new ObjectId('507f1f77bcf86cd799439011'), 1: new ObjectId('507f1f77bcf86cd799439012') }
+        });
         mockCollection.countDocuments.mockResolvedValue(2);
         mockEventsCollection.insertOne.mockResolvedValue({
           insertedId: 'event123'
         });
 
-        await collection.batchCreate(newUsers, 'client123');
+        const ids = await collection.batchCreate(newUsers, 'client123');
+
+        expect(ids).toEqual([
+          '507f1f77bcf86cd799439011',
+          '507f1f77bcf86cd799439012'
+        ]);
 
         expect(mockCollection.insertMany).toHaveBeenCalledWith(
           expect.arrayContaining([
@@ -365,8 +373,9 @@ describe('FlongoCollection', () => {
       });
 
       it('should handle empty array gracefully', async () => {
-        await collection.batchCreate([]);
+        const ids = await collection.batchCreate([]);
 
+        expect(ids).toEqual([]);
         expect(mockCollection.insertMany).not.toHaveBeenCalled();
       });
     });
