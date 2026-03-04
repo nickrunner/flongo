@@ -311,6 +311,49 @@ export class FlongoCollection<T> {
     return Object.values(result.insertedIds).map((id) => id.toString());
   }
 
+  /**
+   * Inserts a document if no document with the same _id exists; otherwise does nothing.
+   * Race-safe "first writer wins" semantics — ideal for cache-through writes.
+   * @param attributes - Document data including _id
+   * @param clientId - Optional client ID for audit trail
+   * @returns Promise resolving to the document (newly created or existing)
+   */
+  async createIfNotExists(attributes: T & { _id: string }, clientId?: string): Promise<Entity & T> {
+    const { _id, ...rest } = attributes as any;
+    const now = Date.now();
+
+    const result = await this.collection.findOneAndUpdate(
+      { _id } as any,
+      { $setOnInsert: { ...rest, createdBy: clientId, createdAt: now, updatedAt: now } } as any,
+      { upsert: true, returnDocument: 'after' }
+    );
+
+    return this.toEntity(result);
+  }
+
+  /**
+   * Inserts a document if no document with the same _id exists; otherwise overwrites it.
+   * Race-safe "last writer wins" semantics.
+   * @param attributes - Document data including _id
+   * @param clientId - Optional client ID for audit trail
+   * @returns Promise resolving to the document (newly created or updated)
+   */
+  async createOrUpdate(attributes: T & { _id: string }, clientId?: string): Promise<Entity & T> {
+    const { _id, createdAt, createdBy, updatedAt, updatedBy, ...rest } = attributes as any;
+    const now = Date.now();
+
+    const result = await this.collection.findOneAndUpdate(
+      { _id } as any,
+      {
+        $set: { ...rest, updatedAt: now, updatedBy: clientId },
+        $setOnInsert: { createdAt: now, createdBy: clientId }
+      } as any,
+      { upsert: true, returnDocument: 'after' }
+    );
+
+    return this.toEntity(result);
+  }
+
   // ===========================================
   // UPDATE OPERATIONS
   // ===========================================

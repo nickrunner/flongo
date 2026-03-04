@@ -379,6 +379,111 @@ describe('FlongoCollection', () => {
         expect(mockCollection.insertMany).not.toHaveBeenCalled();
       });
     });
+
+    describe('createIfNotExists', () => {
+      it('should insert document when it does not exist', async () => {
+        const doc = { _id: 'cache-key-1', name: 'John Doe', email: 'john@example.com', age: 30, isActive: true };
+        const returnedDoc = { _id: 'cache-key-1', name: 'John Doe', email: 'john@example.com', age: 30, isActive: true, createdBy: 'client123', createdAt: expect.any(Number), updatedAt: expect.any(Number) };
+        mockCollection.findOneAndUpdate.mockResolvedValue(returnedDoc);
+
+        const result = await collection.createIfNotExists(doc, 'client123');
+
+        expect(mockCollection.findOneAndUpdate).toHaveBeenCalledWith(
+          { _id: 'cache-key-1' },
+          { $setOnInsert: { name: 'John Doe', email: 'john@example.com', age: 30, isActive: true, createdBy: 'client123', createdAt: expect.any(Number), updatedAt: expect.any(Number) } },
+          { upsert: true, returnDocument: 'after' }
+        );
+        expect(result._id).toBe('cache-key-1');
+        expect(result.name).toBe('John Doe');
+      });
+
+      it('should return existing document without modifying it', async () => {
+        const existingDoc = { _id: 'cache-key-1', name: 'Existing', email: 'existing@example.com', age: 25, isActive: true, createdAt: 1000, updatedAt: 1000 };
+        mockCollection.findOneAndUpdate.mockResolvedValue(existingDoc);
+
+        const result = await collection.createIfNotExists({ _id: 'cache-key-1', name: 'New Name', email: 'new@example.com', age: 30, isActive: false }, 'client123');
+
+        expect(result.name).toBe('Existing');
+        expect(result.createdAt).toBe(1000);
+      });
+
+      it('should work without clientId', async () => {
+        const doc = { _id: 'key-1', name: 'Test', email: 'test@example.com', age: 20, isActive: true };
+        mockCollection.findOneAndUpdate.mockResolvedValue({ ...doc, createdBy: undefined, createdAt: Date.now(), updatedAt: Date.now() });
+
+        await collection.createIfNotExists(doc);
+
+        expect(mockCollection.findOneAndUpdate).toHaveBeenCalledWith(
+          { _id: 'key-1' },
+          { $setOnInsert: expect.objectContaining({ createdBy: undefined }) },
+          { upsert: true, returnDocument: 'after' }
+        );
+      });
+    });
+
+    describe('createOrUpdate', () => {
+      it('should insert document when it does not exist', async () => {
+        const doc = { _id: 'cache-key-1', name: 'John Doe', email: 'john@example.com', age: 30, isActive: true };
+        const returnedDoc = { _id: 'cache-key-1', name: 'John Doe', email: 'john@example.com', age: 30, isActive: true, createdBy: 'client123', createdAt: expect.any(Number), updatedAt: expect.any(Number), updatedBy: 'client123' };
+        mockCollection.findOneAndUpdate.mockResolvedValue(returnedDoc);
+
+        const result = await collection.createOrUpdate(doc, 'client123');
+
+        expect(mockCollection.findOneAndUpdate).toHaveBeenCalledWith(
+          { _id: 'cache-key-1' },
+          {
+            $set: { name: 'John Doe', email: 'john@example.com', age: 30, isActive: true, updatedAt: expect.any(Number), updatedBy: 'client123' },
+            $setOnInsert: { createdAt: expect.any(Number), createdBy: 'client123' }
+          },
+          { upsert: true, returnDocument: 'after' }
+        );
+        expect(result._id).toBe('cache-key-1');
+      });
+
+      it('should overwrite existing document', async () => {
+        const updatedDoc = { _id: 'cache-key-1', name: 'Updated', email: 'updated@example.com', age: 35, isActive: false, createdAt: 1000, updatedAt: 2000, updatedBy: 'client123' };
+        mockCollection.findOneAndUpdate.mockResolvedValue(updatedDoc);
+
+        const result = await collection.createOrUpdate({ _id: 'cache-key-1', name: 'Updated', email: 'updated@example.com', age: 35, isActive: false }, 'client123');
+
+        expect(result.name).toBe('Updated');
+        expect(result.createdAt).toBe(1000);
+        expect(result.updatedAt).toBe(2000);
+      });
+
+      it('should strip Entity timestamp fields from $set to avoid conflicts', async () => {
+        const doc = { _id: 'key-1', name: 'Test', email: 'test@example.com', age: 20, isActive: true, createdAt: 9999, updatedAt: 9999 } as any;
+        mockCollection.findOneAndUpdate.mockResolvedValue(doc);
+
+        await collection.createOrUpdate(doc, 'client123');
+
+        const call = mockCollection.findOneAndUpdate.mock.calls[0];
+        const $set = call[1].$set;
+        const $setOnInsert = call[1].$setOnInsert;
+
+        // createdAt should only be in $setOnInsert, not in $set
+        expect($set).not.toHaveProperty('createdAt');
+        expect($set).not.toHaveProperty('createdBy');
+        expect($setOnInsert).toHaveProperty('createdAt');
+        expect($setOnInsert).toHaveProperty('createdBy');
+      });
+
+      it('should work without clientId', async () => {
+        const doc = { _id: 'key-1', name: 'Test', email: 'test@example.com', age: 20, isActive: true };
+        mockCollection.findOneAndUpdate.mockResolvedValue({ ...doc, updatedBy: undefined, createdAt: Date.now(), updatedAt: Date.now() });
+
+        await collection.createOrUpdate(doc);
+
+        expect(mockCollection.findOneAndUpdate).toHaveBeenCalledWith(
+          { _id: 'key-1' },
+          {
+            $set: expect.objectContaining({ updatedBy: undefined }),
+            $setOnInsert: expect.objectContaining({ createdBy: undefined })
+          },
+          { upsert: true, returnDocument: 'after' }
+        );
+      });
+    });
   });
 
   describe('Update Operations', () => {
