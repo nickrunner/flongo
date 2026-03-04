@@ -375,6 +375,25 @@ export class FlongoQuery implements ICollectionQuery {
     return this;
   }
 
+  /**
+   * Performs a proximity query using MongoDB's $near operator
+   * Requires a 2dsphere index on the target field
+   * Results are automatically sorted by distance (nearest first)
+   * @param center - Center point coordinates
+   * @param maxDistanceMeters - Maximum distance in meters
+   * @returns This query instance for chaining
+   */
+  public near(center: Coordinates, maxDistanceMeters: number): FlongoQuery {
+    this.set("$near", {
+      $geometry: {
+        type: "Point",
+        coordinates: [center.longitude, center.latitude]
+      },
+      $maxDistance: maxDistanceMeters
+    });
+    return this;
+  }
+
   // ===========================================
   // SORTING
   // ===========================================

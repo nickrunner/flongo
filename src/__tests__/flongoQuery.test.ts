@@ -261,6 +261,44 @@ describe("FlongoQuery", () => {
       expect(built).toEqual({});
     });
 
+    it("should handle near query", () => {
+      const center = { latitude: 42.96, longitude: -85.67 };
+      const built = query.where("location").near(center, 500).build();
+
+      expect(built).toEqual({
+        location: {
+          $near: {
+            $geometry: {
+              type: "Point",
+              coordinates: [-85.67, 42.96]
+            },
+            $maxDistance: 500
+          }
+        }
+      });
+    });
+
+    it("should chain near with other conditions", () => {
+      const center = { latitude: 40.7589, longitude: -73.9851 };
+      const built = query
+        .where("location").near(center, 1000)
+        .and("status").eq("active")
+        .build();
+
+      expect(built).toEqual({
+        location: {
+          $near: {
+            $geometry: {
+              type: "Point",
+              coordinates: [-73.9851, 40.7589]
+            },
+            $maxDistance: 1000
+          }
+        },
+        status: { $eq: "active" }
+      });
+    });
+
     it("should handle inRadius with geohash bounds", () => {
       const center = { latitude: 40.7589, longitude: -73.9851 };
       const radius = 1000;
