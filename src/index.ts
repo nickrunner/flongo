@@ -2,7 +2,7 @@
 
 export { FlongoCollection, FlongoCollectionOptions } from "./flongoCollection";
 export { FlongoQuery, FlongoQueryBuilder } from "./flongoQuery";
-export { initializeFlongo, FlongoConfig, flongoClient, flongoDb } from "./flongo";
+export { initializeFlongo, connectFlongo, FlongoConfig, flongoClient, flongoDb } from "./flongo";
 export { Error404, Error400 } from "./errors";
 export {
   Entity,
