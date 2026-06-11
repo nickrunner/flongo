@@ -74,7 +74,68 @@ describe('CacheKeyGenerator', () => {
       
       expect(key1).not.toBe(key2);
     });
-    
+
+    it('should generate different keys for queries differing only by a tiebreaker', () => {
+      const base = {
+        collection: 'stays',
+        operation: 'getAll',
+        query: {
+          expressions: [{ op: '==', key: 'status', val: 'accepted' }],
+          ranges: [],
+          orderField: 'featured',
+          orderDirection: SortDirection.Descending,
+          orQueries: [],
+          andQueries: []
+        }
+      } as const;
+
+      const single = CacheKeyGenerator.generate(base);
+      const withTiebreaker = CacheKeyGenerator.generate({
+        ...base,
+        query: {
+          ...base.query,
+          sorts: [
+            { field: 'featured', direction: SortDirection.Descending },
+            { field: '_id', direction: SortDirection.Ascending }
+          ]
+        }
+      });
+
+      expect(single).not.toBe(withTiebreaker);
+    });
+
+    it('should keep the key stable for a single sort regardless of the sorts array', () => {
+      const withoutSorts = CacheKeyGenerator.generate({
+        collection: 'stays',
+        operation: 'getAll',
+        query: {
+          expressions: [],
+          ranges: [],
+          orderField: 'featured',
+          orderDirection: SortDirection.Descending,
+          orQueries: [],
+          andQueries: []
+        }
+      });
+
+      // A redundant single-element sorts array must not change the key.
+      const withSingleSort = CacheKeyGenerator.generate({
+        collection: 'stays',
+        operation: 'getAll',
+        query: {
+          expressions: [],
+          ranges: [],
+          orderField: 'featured',
+          orderDirection: SortDirection.Descending,
+          sorts: [{ field: 'featured', direction: SortDirection.Descending }],
+          orQueries: [],
+          andQueries: []
+        }
+      });
+
+      expect(withoutSorts).toBe(withSingleSort);
+    });
+
     it('should include pagination in the key', () => {
       const key = CacheKeyGenerator.generate({
         collection: 'users',

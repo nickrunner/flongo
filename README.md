@@ -105,6 +105,17 @@ const results = await collection.getAll(
   query.orderBy('createdAt', SortDirection.Descending),
   { offset: 0, count: 20 }
 );
+
+// Compound (multi-field) sort with a unique tiebreaker.
+// Appending `_id` makes skip/limit pagination deterministic, so pages never
+// overlap or skip documents when the primary sort key has ties.
+const page = await collection.getAll(
+  new FlongoQuery()
+    .where('status').eq('accepted')
+    .orderBy('featured', SortDirection.Descending)
+    .thenBy('_id', SortDirection.Ascending), // => sort: { featured: -1, _id: 1 }
+  { offset: 0, count: 24 }
+);
 ```
 
 ### Collection Operations

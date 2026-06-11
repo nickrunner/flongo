@@ -7,6 +7,7 @@ import {
   ColRange,
   ICollectionQuery,
   Logic,
+  Sort,
   SortDirection
 } from "./types";
 import { geohashQueryBounds } from "geofire-common";
@@ -33,11 +34,27 @@ export class FlongoQuery implements ICollectionQuery {
   /** Array of range queries (currently unused but reserved for future features) */
   public ranges: ColRange[] = [];
 
-  /** Field to sort results by */
-  public orderField?: string;
+  /**
+   * Ordered list of sort keys. The first entry is the primary sort, subsequent
+   * entries act as tiebreakers (in order). Populated by `orderBy()`/`thenBy()`.
+   */
+  public sorts: Sort[] = [];
 
-  /** Direction for sorting (ascending or descending) */
-  public orderDirection?: SortDirection;
+  /**
+   * Primary sort field, derived from `sorts[0]`.
+   * @deprecated Retained for backward compatibility; use `sorts`.
+   */
+  public get orderField(): string | undefined {
+    return this.sorts[0]?.field;
+  }
+
+  /**
+   * Primary sort direction, derived from `sorts[0]`.
+   * @deprecated Retained for backward compatibility; use `sorts`.
+   */
+  public get orderDirection(): SortDirection | undefined {
+    return this.sorts[0]?.direction;
+  }
 
   /** Array of queries to be combined with OR logic */
   public orQueries: FlongoQuery[] = [];
@@ -399,14 +416,47 @@ export class FlongoQuery implements ICollectionQuery {
   // ===========================================
 
   /**
-   * Sets the field and direction for sorting results
+   * Sets the primary sort field and direction, resetting any previously
+   * configured sort keys (including tiebreakers added via `thenBy`).
    * @param field - Field name to sort by
    * @param direction - Sort direction (ascending or descending)
    * @returns This query instance for chaining
    */
   public orderBy(field?: string, direction?: SortDirection): FlongoQuery {
-    this.orderField = field;
-    this.orderDirection = direction;
+    this.sorts = field ? [{ field, direction }] : [];
+    return this;
+  }
+
+  /**
+   * Appends a secondary (tertiary, …) sort key used as a tiebreaker after the
+   * primary `orderBy` field. Sort keys are applied in the order they are added,
+   * which is what makes deterministic pagination possible (e.g. appending a
+   * unique `_id` tiebreaker so `skip`/`limit` pages don't overlap).
+   *
+   * If called before any `orderBy`, the field becomes the primary sort.
+   * If the same field is added more than once, the latest direction wins
+   * (the field keeps its original position in the sort order).
+   *
+   * @example
+   * new FlongoQuery()
+   *   .orderBy('featured', SortDirection.Descending)
+   *   .thenBy('_id', SortDirection.Ascending);
+   * // => sort: { featured: -1, _id: 1 }
+   *
+   * @param field - Field name to sort by
+   * @param direction - Sort direction (ascending or descending)
+   * @returns This query instance for chaining
+   */
+  public thenBy(field?: string, direction?: SortDirection): FlongoQuery {
+    if (!field) {
+      return this;
+    }
+    const existing = this.sorts.find((s) => s.field === field);
+    if (existing) {
+      existing.direction = direction;
+    } else {
+      this.sorts.push({ field, direction });
+    }
     return this;
   }
 
@@ -545,11 +595,17 @@ export class FlongoQuery implements ICollectionQuery {
       mongodbOptions.limit = pagination.count;
     }
 
-    // Add sorting if specified
-    if (this.orderField && this.orderDirection) {
-      mongodbOptions.sort = {
-        [this.orderField]: this.orderDirection === SortDirection.Ascending ? 1 : -1
-      };
+    // Add sorting if specified. Iterate sort keys in order so MongoDB honors the
+    // insertion order of the resulting `sort` object's keys (primary first, then
+    // tiebreakers). Entries without a direction are skipped, preserving the prior
+    // behavior where a field set with no direction produced no sort.
+    const sortKeys = this.sorts.filter((s) => s.field && s.direction);
+    if (sortKeys.length) {
+      const sort: Record<string, 1 | -1> = {};
+      for (const s of sortKeys) {
+        sort[s.field] = s.direction === SortDirection.Ascending ? 1 : -1;
+      }
+      mongodbOptions.sort = sort as FindOptions<T>["sort"];
     }
 
     return mongodbOptions;

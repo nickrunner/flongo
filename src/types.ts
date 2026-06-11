@@ -83,11 +83,21 @@ export class ColExpression {
   }
 }
 
+/** A single sort key: a field paired with a direction. */
+export interface Sort {
+  field: string;
+  direction?: SortDirection;
+}
+
 // Interfaces for query and collection operations
 export type ICollectionQuery = {
   expressions: ColExpression[];
   ranges: ColRange[];
+  /** Ordered list of sort keys. The first entry is the primary sort. */
+  sorts?: Sort[];
+  /** @deprecated Primary sort field; derived from `sorts[0]`. Use `sorts`. */
   orderField?: string;
+  /** @deprecated Primary sort direction; derived from `sorts[0]`. Use `sorts`. */
   orderDirection?: SortDirection;
   orQueries: ICollectionQuery[];
   andQueries: ICollectionQuery[];

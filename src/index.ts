@@ -15,6 +15,7 @@ export {
   EventRecord,
   Logic,
   SortDirection,
+  Sort,
   ColRange,
   ColExpression,
   ICollectionQuery,

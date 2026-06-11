@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FlongoCollection } from "../flongoCollection";
 import { FlongoQuery } from "../flongoQuery";
+import { SortDirection } from "../types";
 import { TestUser, sampleUsers } from "./testUtils";
 
 // Mock the entire flongo module for integration tests
@@ -434,6 +435,67 @@ describe("Integration Tests", () => {
 
       const hasMinors = await collection.exists(new FlongoQuery().where("age").lt(18));
       expect(hasMinors).toBe(false);
+    });
+  });
+
+  describe("Deterministic pagination with compound sort", () => {
+    // Regression: paginating with skip/limit and a single non-unique sort key
+    // (e.g. a boolean `featured`/`isActive`) lets equal-keyed documents appear in
+    // an undefined order, so separate page queries can overlap or skip documents.
+    // Appending a unique `_id` tiebreaker via thenBy() yields a total order, so
+    // pages are non-overlapping and gapless across independent queries.
+    const TOTAL = 25;
+    const PAGE = 10;
+
+    beforeEach(async () => {
+      // Every user ties on the primary sort key (isActive === true).
+      const users = Array.from({ length: TOTAL }, (_, i) => ({
+        name: `User ${i}`,
+        email: `user${i}@example.com`,
+        age: 20 + i,
+        tags: ["member"],
+        isActive: true
+      }));
+      await collection.batchCreate(users);
+    });
+
+    const buildSortedQuery = () =>
+      new FlongoQuery()
+        .where("isActive")
+        .eq(true)
+        .orderBy("isActive", SortDirection.Descending)
+        .thenBy("_id", SortDirection.Ascending);
+
+    it("emits the tiebreaker in sort options", () => {
+      expect(buildSortedQuery().buildOptions().sort).toEqual({
+        isActive: -1,
+        _id: 1
+      });
+    });
+
+    it("returns non-overlapping, gapless pages across separate queries", async () => {
+      const seenIds: string[] = [];
+
+      for (let offset = 0; offset < TOTAL; offset += PAGE) {
+        // Each page is an independent query, mirroring real "See more" requests.
+        const page = await collection.getAll(buildSortedQuery(), {
+          offset,
+          count: PAGE
+        });
+        seenIds.push(...page.map((u) => u._id));
+      }
+
+      // Gapless: every document appears.
+      expect(seenIds).toHaveLength(TOTAL);
+      // Non-overlapping: no document appears twice.
+      expect(new Set(seenIds).size).toBe(TOTAL);
+      // Deterministic: the paginated walk reproduces the single full-result
+      // ordering exactly, so pages line up with no overlap or gap.
+      const allAtOnce = await collection.getAll(buildSortedQuery(), {
+        offset: 0,
+        count: TOTAL
+      });
+      expect(seenIds).toEqual(allAtOnce.map((u) => u._id));
     });
   });
 

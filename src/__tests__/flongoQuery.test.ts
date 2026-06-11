@@ -402,6 +402,90 @@ describe("FlongoQuery", () => {
         createdAt: -1
       });
     });
+
+    it("should append a tiebreaker with thenBy", () => {
+      query
+        .orderBy("featured", SortDirection.Descending)
+        .thenBy("_id", SortDirection.Ascending);
+
+      const options = query.buildOptions();
+
+      expect(options.sort).toEqual({
+        featured: -1,
+        _id: 1
+      });
+      // Key insertion order must be preserved (primary first, then tiebreaker)
+      expect(Object.keys(options.sort as object)).toEqual(["featured", "_id"]);
+    });
+
+    it("should support three-level sorting in order", () => {
+      query
+        .orderBy("featured", SortDirection.Descending)
+        .thenBy("createdAt", SortDirection.Descending)
+        .thenBy("_id", SortDirection.Ascending);
+
+      const options = query.buildOptions();
+
+      expect(Object.keys(options.sort as object)).toEqual([
+        "featured",
+        "createdAt",
+        "_id"
+      ]);
+      expect(options.sort).toEqual({
+        featured: -1,
+        createdAt: -1,
+        _id: 1
+      });
+    });
+
+    it("should treat thenBy as primary when no orderBy was called", () => {
+      query.thenBy("_id", SortDirection.Ascending);
+
+      expect(query.orderField).toBe("_id");
+      expect(query.orderDirection).toBe(SortDirection.Ascending);
+      expect(query.buildOptions().sort).toEqual({ _id: 1 });
+    });
+
+    it("should reset tiebreakers when orderBy is called again", () => {
+      query
+        .orderBy("featured", SortDirection.Descending)
+        .thenBy("_id", SortDirection.Ascending)
+        .orderBy("name", SortDirection.Ascending);
+
+      expect(query.buildOptions().sort).toEqual({ name: 1 });
+      expect(query.orderField).toBe("name");
+    });
+
+    it("should de-dupe a repeated thenBy field (last direction wins, position kept)", () => {
+      query
+        .orderBy("featured", SortDirection.Descending)
+        .thenBy("_id", SortDirection.Ascending)
+        .thenBy("_id", SortDirection.Descending);
+
+      const options = query.buildOptions();
+
+      expect(Object.keys(options.sort as object)).toEqual(["featured", "_id"]);
+      expect(options.sort).toEqual({
+        featured: -1,
+        _id: -1
+      });
+    });
+
+    it("should keep orderField/orderDirection reflecting the primary sort key", () => {
+      query
+        .orderBy("featured", SortDirection.Descending)
+        .thenBy("_id", SortDirection.Ascending);
+
+      expect(query.orderField).toBe("featured");
+      expect(query.orderDirection).toBe(SortDirection.Descending);
+    });
+
+    it("should produce the previous single-orderBy sort shape (back-compat)", () => {
+      query.orderBy("createdAt", SortDirection.Descending);
+
+      // Byte-identical to the pre-thenBy output: a single-key sort object.
+      expect(query.buildOptions().sort).toEqual({ createdAt: -1 });
+    });
   });
 
   describe("Pagination", () => {

@@ -29,6 +29,10 @@ interface NormalizedQuery {
     field: string;
     direction: SortDirection;
   };
+  sorts?: Array<{
+    field: string;
+    direction: SortDirection;
+  }>;
   or?: NormalizedQuery[];
   and?: NormalizedQuery[];
 }
@@ -126,7 +130,18 @@ export class CacheKeyGenerator {
         direction: query.orderDirection || SortDirection.Ascending
       };
     }
-    
+
+    // Include the full ordered sort list only when tiebreakers are present, so
+    // queries differing only by a tiebreaker (e.g. `{ featured: -1 }` vs
+    // `{ featured: -1, _id: 1 }`) hash to distinct keys. Single-sort queries
+    // keep their previous key shape (just `order`) for cache continuity.
+    if (query.sorts && query.sorts.length > 1) {
+      normalized.sorts = query.sorts.map(sort => ({
+        field: sort.field,
+        direction: sort.direction || SortDirection.Ascending
+      }));
+    }
+
     if (query.orQueries && query.orQueries.length > 0) {
       normalized.or = query.orQueries
         .map(q => this.normalizeQuery(q))
