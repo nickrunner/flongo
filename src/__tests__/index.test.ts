@@ -19,6 +19,13 @@ describe("Package Exports", () => {
     expect(flongo.Error404).toBeDefined();
     expect(flongo.Error400).toBeDefined();
 
+    // Declarative index management
+    expect(flongo.syncFlongoIndexes).toBeDefined();
+    expect(flongo.getFlongoIndexRegistry).toBeDefined();
+    expect(flongo.defaultIndexName).toBeDefined();
+    expect(typeof flongo.syncFlongoIndexes).toBe("function");
+    expect(typeof flongo.defaultIndexName).toBe("function");
+
     // Types and interfaces
     expect(flongo.Entity).toBeUndefined(); // Types don't exist at runtime
     expect(flongo.SortDirection).toBeDefined();

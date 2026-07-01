@@ -4,6 +4,23 @@ export { FlongoCollection, FlongoCollectionOptions } from "./flongoCollection";
 export { FlongoQuery, FlongoQueryBuilder } from "./flongoQuery";
 export { initializeFlongo, connectFlongo, FlongoConfig, flongoClient, flongoDb } from "./flongo";
 export { Error404, Error400 } from "./errors";
+
+// Declarative index management
+export {
+  syncFlongoIndexes,
+  getFlongoIndexRegistry,
+  defaultIndexName,
+  FlongoIndexSpec,
+  FlongoIndexOptions,
+  FlongoIndexKeyType,
+  FlongoIndexRegistry,
+  FlongoIndexReport,
+  FlongoIndexStatus,
+  IndexSyncOptions,
+  IndexSyncMode,
+  IndexSyncOnError,
+  SyncFlongoIndexesOptions
+} from "./indexes";
 export {
   Entity,
   DbRecord,

@@ -1,7 +1,15 @@
 import { flongoDb } from "./flongo";
 import { FlongoQuery } from "./flongoQuery";
 import { Entity, Event, EventName, EventRecord, Pagination, Repository } from "./types";
-import { Collection, Document, Filter, FindOptions, ObjectId, OptionalUnlessRequiredId } from "mongodb";
+import {
+  Collection,
+  Document,
+  Filter,
+  FindOptions,
+  IndexDescription,
+  ObjectId,
+  OptionalUnlessRequiredId
+} from "mongodb";
 import { Error400, Error404 } from "./errors";
 
 /**
@@ -53,9 +61,18 @@ export function __resetServerVersionCache(): void {
  * Configuration options for FlongoCollection instances
  */
 export interface FlongoCollectionOptions {
-  /** Whether to enable automatic event logging for CRUD operations */
+  /**
+   * Whether to enable automatic event logging (audit trail) for CRUD
+   * operations. Defaults to `false` — audit logging is opt-in. Set to `true`
+   * per collection to record an audit trail (into `eventsCollectionName`).
+   */
   enableEventLogging?: boolean;
-  /** Name of the collection to store events in (defaults to "events") */
+  /**
+   * Name of the collection audit events are written to. Defaults to `"events"`.
+   * If your app has its own `events`/analytics collection, redirect Flongo's
+   * audit trail to a dedicated collection (e.g. `"audit_events"`) so audit and
+   * analytics can be indexed and retained independently.
+   */
   eventsCollectionName?: string;
 }
 
@@ -109,7 +126,7 @@ export class FlongoCollection<T> {
    */
   constructor(collectionName: Repository, options: FlongoCollectionOptions = {}) {
     this.collection = flongoDb.collection(collectionName);
-    this.options = { enableEventLogging: true, eventsCollectionName: "events", ...options };
+    this.options = { enableEventLogging: false, eventsCollectionName: "events", ...options };
 
     // Initialize events collection only if logging is enabled
     this.events = this.options.enableEventLogging
@@ -621,6 +638,33 @@ export class FlongoCollection<T> {
         $set: { updatedAt: Date.now(), updatedBy: clientId }
       } as any
     );
+  }
+
+  // ===========================================
+  // INDEX INTROSPECTION
+  // ===========================================
+
+  /**
+   * Lists the indexes currently defined on this collection. A thin passthrough
+   * over the driver's `listIndexes()`, useful for verifying that declared
+   * indexes were applied (pairs with `syncFlongoIndexes()` and `explain()`).
+   * @returns Promise resolving to the collection's index descriptions
+   */
+  async listIndexes(): Promise<IndexDescription[]> {
+    return (await this.collection.listIndexes().toArray()) as IndexDescription[];
+  }
+
+  /**
+   * Returns the query planner's execution plan for a FlongoQuery. Pairs with
+   * index verification — inspect the winning plan's stage to confirm an
+   * `IXSCAN` (index scan) rather than a `COLLSCAN` (full collection scan).
+   * @param query - The FlongoQuery to explain
+   * @returns Promise resolving to MongoDB's explain output
+   */
+  async explain(query: FlongoQuery): Promise<Document> {
+    const mongodbQuery: Filter<Entity & T> = query?.build() ?? {};
+    const mongodbOptions: FindOptions<Entity & T> = query?.buildOptions() ?? {};
+    return this.collection.find(mongodbQuery, mongodbOptions).explain();
   }
 
   // ===========================================

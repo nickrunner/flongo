@@ -149,7 +149,7 @@ The `build()` method in FlongoQuery converts the fluent interface to MongoDB fil
 ### Event Logging System
 Optional audit trail that logs all database operations:
 - **Event Types**: Create, Update, Delete operations
-- **Configurable**: Can be disabled per collection
+- **Opt-in**: Disabled by default; enable per collection via `enableEventLogging: true`
 - **Non-blocking**: Event logging failures don't affect main operations
 - **Rich Context**: Includes operation details, timestamps, and client identification
 

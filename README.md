@@ -47,6 +47,7 @@ const adults = await users.getAll(
 - 🚀 **TypeScript support** - Full type safety and IntelliSense
 - 📊 **Rich query operations** - Comparisons, arrays, geospatial, text search
 - 🎛️ **Configurable** - Optional event logging, custom error handling
+- 🗂️ **Declarative indexes** - Declare once, ensure idempotently on every boot
 - 🧪 **Battle-tested** - Extracted from production codebase
 - 📦 **Zero config** - Works with existing MongoDB setup
 
@@ -204,16 +205,170 @@ await collection.batchCreate([user1, user2, user3]);
 ### Configuration
 
 ```typescript
-// Disable event logging
+// Audit logging is OFF by default — opt in per collection
 const collection = new FlongoCollection<User>('users', {
-  enableEventLogging: false
+  enableEventLogging: true
 });
 
-// Custom events collection
+// Opt in with a custom events collection
 const collection = new FlongoCollection<User>('users', {
   enableEventLogging: true,
   eventsCollectionName: 'audit_logs'
 });
+```
+
+#### Audit logging vs. your own `events` collection
+
+Flongo's built-in audit trail is **opt-in** (`enableEventLogging` defaults to
+`false`). When enabled, it writes to a collection named `events` by default. If
+your application has its own `events` (analytics) collection, redirect Flongo's
+audit trail to a dedicated collection so the two can be indexed and retained
+independently:
+
+```typescript
+const users = new FlongoCollection<User>('users', {
+  enableEventLogging: true,
+  eventsCollectionName: 'audit_events'   // keep audit separate from app analytics
+});
+```
+
+Both `eventsCollectionName` and `enableEventLogging` are per-collection, so you
+control audit behavior for each collection independently.
+
+## Index Management
+
+Declare your indexes once in a central registry and Flongo will ensure them
+**idempotently on every boot**. This keeps indexes colocated, version-controlled,
+and out of ad-hoc scripts against the raw driver. Index management is **purely
+additive** — with no `indexes` registry declared, boot behavior is identical to
+previous versions.
+
+### Declaring indexes
+
+Register indexes at initialization, keyed by collection name. A single central
+registry is the source of truth (rather than per-`FlongoCollection`-construction
+specs), since one physical collection is often constructed in many places.
+
+```typescript
+import { connectFlongo, syncFlongoIndexes } from 'flongo';
+
+await connectFlongo({
+  connectionString: process.env.MONGO_URL!,
+  dbName: 'stays',
+  indexes: {
+    events: [
+      // Compound analytics indexes (order matters — ESR: equality, sort, range)
+      { keys: { name: 1, 'value.stayId': 1, createdAt: 1 } },
+      { keys: { name: 1, identity: 1, createdAt: 1 } }
+    ],
+    users: [
+      { keys: { email: 1 }, options: { unique: true } }
+    ],
+    stays: [
+      { keys: { shortlink: 1 }, options: { unique: true, sparse: true } },
+      { keys: { 'location.coordinates.geoJSON': '2dsphere' } }
+    ]
+  },
+  indexSync: { mode: 'ensure', onError: 'warn', background: false }
+});
+```
+
+`connectFlongo` ensures the declared indexes after connecting. You can also run
+the sync explicitly at any time (e.g. to gate boot on it, or from a migration /
+CI job):
+
+```typescript
+const report = await syncFlongoIndexes();   // idempotent; returns FlongoIndexReport[]
+```
+
+### Index spec
+
+```typescript
+interface FlongoIndexSpec {
+  keys: Record<string, 1 | -1 | '2dsphere' | 'text' | 'hashed'>;
+  options?: {
+    name?: string;                       // custom index name
+    unique?: boolean;
+    sparse?: boolean;
+    partialFilterExpression?: Document;  // partial index (e.g. unique-when-present)
+    expireAfterSeconds?: number;         // TTL — see caveat below
+    collation?: CollationOptions;
+    hidden?: boolean;                    // hide from the planner without dropping
+  };
+}
+```
+
+### Sync semantics
+
+`syncFlongoIndexes()` calls `createIndex(keys, options)` per spec and returns a
+structured report:
+
+```typescript
+interface FlongoIndexReport {
+  collection: string;
+  name: string;                                                   // resolved name
+  status: 'created' | 'exists' | 'conflict' | 'failed' | 'pruned';
+  error?: string;
+}
+```
+
+- **Identical** spec already present → `"exists"` (no-op).
+- **Same keys, different options** → MongoDB throws `IndexOptionsConflict`;
+  Flongo records `"conflict"` and honors `onError` (it never silently
+  drops/recreates).
+- **Creation error** (classic case: a `unique` index over a collection that
+  already contains duplicates) → `"failed"` with a message naming the likely
+  cause. By default this does **not** crash the process.
+
+#### `indexSync` options
+
+| Option        | Values                          | Default    | Behavior |
+|---------------|---------------------------------|------------|----------|
+| `mode`        | `'ensure'` \| `'off'` \| `'strict'` | `'ensure'` | `ensure`: create missing, tolerate problems per `onError`. `off`: register specs but do nothing at boot (call `syncFlongoIndexes()` yourself). `strict`: throw on any conflict/failure (for CI / migration gates). |
+| `onError`     | `'warn'` \| `'throw'`           | `'warn'`   | How non-fatal problems are surfaced. `strict` mode always throws. |
+| `background`  | `boolean`                       | `false`    | When `true`, boot does not block on index builds — the sync runs asynchronously and logs its outcome. `await syncFlongoIndexes()` remains available when you want to await. |
+| `prune`       | `boolean`                       | `false`    | Drop indexes present in Mongo but absent from the registry. See below. |
+| `dryRun`      | `boolean`                       | `false`    | With `prune`, log what *would* be dropped without dropping. |
+
+### Non-destructive by default & pruning
+
+Indexes present in Mongo but absent from the registry are **left untouched** by
+default. Dropping is explicit opt-in and **never** touches the mandatory `_id_`
+index:
+
+```typescript
+// Dry run first — logs out-of-registry indexes without dropping anything
+await syncFlongoIndexes({ prune: true, dryRun: true });
+
+// Then actually prune
+const report = await syncFlongoIndexes({ prune: true });
+```
+
+### Verifying indexes
+
+Two passthroughs help confirm indexes are applied and used:
+
+```typescript
+const users = new FlongoCollection<User>('users');
+
+await users.listIndexes();   // the collection's current index descriptions
+
+// Confirm a query uses an index scan (IXSCAN) rather than a full scan (COLLSCAN)
+const plan = await users.explain(new FlongoQuery().where('email').eq('a@b.com'));
+```
+
+### TTL caveat ⚠️
+
+`expireAfterSeconds` (TTL) requires the indexed field to be a **BSON `Date`**.
+Flongo stamps `createdAt` / `updatedAt` as epoch **numbers** (`Date.now()`), so a
+TTL index on `createdAt` **will not expire anything**. To use TTL, index a
+dedicated `Date`-typed field that you write yourself:
+
+```typescript
+await events.create({ ...data, expiresAt: new Date(Date.now() + 30 * 86400_000) });
+
+// registry
+events: [{ keys: { expiresAt: 1 }, options: { expireAfterSeconds: 0 } }]
 ```
 
 ## Examples

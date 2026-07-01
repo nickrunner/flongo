@@ -59,7 +59,8 @@ describe('FlongoCollection', () => {
       toArray: vi.fn().mockResolvedValue([]),
       limit: vi.fn().mockReturnThis(),
       skip: vi.fn().mockReturnThis(),
-      sort: vi.fn().mockReturnThis()
+      sort: vi.fn().mockReturnThis(),
+      explain: vi.fn().mockResolvedValue({ queryPlanner: { winningPlan: { stage: 'IXSCAN' } } })
     };
     
     const mockAggregateCursor = {
@@ -77,7 +78,13 @@ describe('FlongoCollection', () => {
       deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
       deleteMany: vi.fn().mockResolvedValue({ deletedCount: 1 }),
       countDocuments: vi.fn().mockResolvedValue(0),
-      findOneAndUpdate: vi.fn()
+      findOneAndUpdate: vi.fn(),
+      listIndexes: vi.fn(() => ({
+        toArray: vi.fn().mockResolvedValue([
+          { name: '_id_', key: { _id: 1 } },
+          { name: 'email_1', key: { email: 1 } }
+        ])
+      }))
     };
 
     mockEventsCollection = {
@@ -99,34 +106,41 @@ describe('FlongoCollection', () => {
     // starts from a cold cache.
     __resetServerVersionCache();
 
-    collection = new FlongoCollection<TestUser>('users');
+    // Audit logging is opt-in (off by default); enable it here so the CRUD
+    // tests below can assert on the emitted audit events.
+    collection = new FlongoCollection<TestUser>('users', { enableEventLogging: true });
   });
 
   describe('Constructor', () => {
-    it('should create collection with default options', () => {
+    it('should not create an events collection by default (logging is opt-in)', () => {
+      // Clear previous calls from beforeEach
+      mockDb.collection.mockClear();
+
       const coll = new FlongoCollection<TestUser>('users');
+      expect(mockDb.collection).toHaveBeenCalledWith('users');
+      // Audit logging defaults to off, so no events collection is opened.
+      expect(mockDb.collection).not.toHaveBeenCalledWith('events');
+      expect(mockDb.collection).toHaveBeenCalledTimes(1);
+    });
+
+    it('should create an events collection when logging is explicitly enabled', () => {
+      // Clear previous calls from beforeEach
+      mockDb.collection.mockClear();
+
+      const coll = new FlongoCollection<TestUser>('users', {
+        enableEventLogging: true
+      });
+
       expect(mockDb.collection).toHaveBeenCalledWith('users');
       expect(mockDb.collection).toHaveBeenCalledWith('events');
     });
 
-    it('should create collection with custom options', () => {
-      // Clear previous calls from beforeEach
-      mockDb.collection.mockClear();
-      
-      const coll = new FlongoCollection<TestUser>('users', {
-        enableEventLogging: false
-      });
-      
-      expect(mockDb.collection).toHaveBeenCalledWith('users');
-      // Should not create events collection when logging disabled
-      expect(mockDb.collection).toHaveBeenCalledTimes(1);
-    });
-
     it('should create collection with custom events collection name', () => {
       const coll = new FlongoCollection<TestUser>('users', {
+        enableEventLogging: true,
         eventsCollectionName: 'audit_logs'
       });
-      
+
       expect(mockDb.collection).toHaveBeenCalledWith('users');
       expect(mockDb.collection).toHaveBeenCalledWith('audit_logs');
     });
@@ -992,6 +1006,37 @@ describe('FlongoCollection', () => {
 
       expect(mockEventsCollection.insertOne).not.toHaveBeenCalled();
       expect(result).toBeNull();
+    });
+
+    it('should not log events by default (audit logging is opt-in)', async () => {
+      const defaultCollection = new FlongoCollection<TestUser>('users');
+
+      const result = await defaultCollection.logEvent({
+        name: EventName.CreateEntity,
+        value: { id: '123', collectionType: 'users', count: 1 }
+      });
+
+      expect(mockEventsCollection.insertOne).not.toHaveBeenCalled();
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('Index Introspection', () => {
+    it('listIndexes returns the collection index descriptions', async () => {
+      const indexes = await collection.listIndexes();
+      expect(mockCollection.listIndexes).toHaveBeenCalled();
+      expect(indexes.map((i: any) => i.name)).toEqual(['_id_', 'email_1']);
+    });
+
+    it('explain returns the query planner output for a FlongoQuery', async () => {
+      const query = new FlongoQuery().where('email').eq('john@example.com');
+      const plan = await collection.explain(query);
+
+      expect(mockCollection.find).toHaveBeenCalledWith(
+        { email: { $eq: 'john@example.com' } },
+        {}
+      );
+      expect((plan as any).queryPlanner.winningPlan.stage).toBe('IXSCAN');
     });
   });
 });

@@ -319,7 +319,9 @@ describe("Integration Tests", () => {
     mockDb = flongoModule.flongoDb;
     mockDb._testReset();
 
-    collection = new FlongoCollection<TestUser>("users");
+    // Audit logging is opt-in; enable it so the event-logging integration
+    // tests can observe the emitted audit events.
+    collection = new FlongoCollection<TestUser>("users", { enableEventLogging: true });
   });
 
   describe("End-to-End CRUD Operations", () => {
@@ -607,6 +609,7 @@ describe("Integration Tests", () => {
   describe("Configuration Integration", () => {
     it("should work with custom events collection name", async () => {
       const customCollection = new FlongoCollection<TestUser>("users", {
+        enableEventLogging: true,
         eventsCollectionName: "audit_logs"
       });
 
