@@ -18,13 +18,19 @@ class MockIndexedCollection {
     { name: "_id_", key: { _id: 1 } }
   ];
 
-  // name -> error to throw when creating that index (simulates conflict/failure)
-  public createErrors = new Map<string, any>();
+  // name -> queue of errors to throw on successive creates of that index
+  // (simulates conflict/failure; an exhausted queue means creation succeeds)
+  public createErrors = new Map<string, any[]>();
+
+  failCreate(name: string, ...errors: any[]): void {
+    this.createErrors.set(name, [...(this.createErrors.get(name) ?? []), ...errors]);
+  }
 
   createIndex = vi.fn(async (keys: Record<string, any>, options: any = {}) => {
     const name = options.name ?? defaultIndexName(keys);
-    if (this.createErrors.has(name)) {
-      throw this.createErrors.get(name);
+    const queue = this.createErrors.get(name);
+    if (queue?.length) {
+      throw queue.shift();
     }
     if (!this.indexes.find((i) => i.name === name)) {
       this.indexes.push({ name, key: keys });
@@ -194,7 +200,7 @@ describe("Declarative index management", () => {
   describe("conflicts", () => {
     it("records conflict and continues under onError warn", async () => {
       const coll = getCollection("users");
-      coll.createErrors.set("email_1", conflictError());
+      coll.failCreate("email_1", conflictError());
       registerFlongoIndexes({ users: [{ keys: { email: 1 } }] });
 
       const reports = await syncFlongoIndexes({ onError: "warn" });
@@ -205,7 +211,7 @@ describe("Declarative index management", () => {
 
     it("throws on conflict under onError throw", async () => {
       const coll = getCollection("users");
-      coll.createErrors.set("email_1", conflictError());
+      coll.failCreate("email_1", conflictError());
       registerFlongoIndexes({ users: [{ keys: { email: 1 } }] });
 
       await expect(syncFlongoIndexes({ onError: "throw" })).rejects.toThrow(/conflict/i);
@@ -215,7 +221,7 @@ describe("Declarative index management", () => {
   describe("failures", () => {
     it("records failed (not crash) for a unique index over duplicates under warn", async () => {
       const coll = getCollection("users");
-      coll.createErrors.set("email_1", duplicateKeyError());
+      coll.failCreate("email_1", duplicateKeyError());
       registerFlongoIndexes({ users: [{ keys: { email: 1 }, options: { unique: true } }] });
 
       const reports = await syncFlongoIndexes({ onError: "warn" });
@@ -226,7 +232,7 @@ describe("Declarative index management", () => {
     });
 
     it("continues to later collections after a failure under warn", async () => {
-      getCollection("users").createErrors.set("email_1", duplicateKeyError());
+      getCollection("users").failCreate("email_1", duplicateKeyError());
       registerFlongoIndexes({
         users: [{ keys: { email: 1 }, options: { unique: true } }],
         stays: [{ keys: { shortlink: 1 } }]
@@ -241,7 +247,7 @@ describe("Declarative index management", () => {
 
   describe("modes", () => {
     it("strict throws on failure regardless of onError", async () => {
-      getCollection("users").createErrors.set("email_1", duplicateKeyError());
+      getCollection("users").failCreate("email_1", duplicateKeyError());
       registerFlongoIndexes({ users: [{ keys: { email: 1 }, options: { unique: true } }] });
       setIndexSyncConfig({ mode: "strict", onError: "warn" });
 
@@ -319,6 +325,146 @@ describe("Declarative index management", () => {
       await syncFlongoIndexes();
 
       expect(coll.dropIndex).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("reconciling", () => {
+    it("drops and rebuilds a conflicting index, reporting reconciled", async () => {
+      const coll = getCollection("users");
+      coll.indexes.push({ name: "email_1", key: { email: 1 } });
+      coll.failCreate("email_1", conflictError());
+      registerFlongoIndexes({ users: [{ keys: { email: 1 }, options: { unique: true } }] });
+
+      const reports = await syncFlongoIndexes({ reconcile: true });
+
+      expect(coll.dropIndex).toHaveBeenCalledWith("email_1");
+      expect(reports[0].status).toBe("reconciled");
+      expect(reports[0].name).toBe("email_1");
+      // Rebuilt with the declared options after the drop.
+      expect(coll.createIndex).toHaveBeenCalledTimes(2);
+      expect(coll.createIndex).toHaveBeenLastCalledWith({ email: 1 }, { unique: true });
+    });
+
+    it("honors reconcile from the indexSync config", async () => {
+      const coll = getCollection("users");
+      coll.indexes.push({ name: "email_1", key: { email: 1 } });
+      coll.failCreate("email_1", conflictError());
+      registerFlongoIndexes({ users: [{ keys: { email: 1 }, options: { unique: true } }] });
+      setIndexSyncConfig({ reconcile: true });
+
+      const reports = await syncFlongoIndexes();
+
+      expect(reports[0].status).toBe("reconciled");
+    });
+
+    it("dry-run logs the candidate without dropping and reports conflict", async () => {
+      const coll = getCollection("users");
+      coll.indexes.push({ name: "email_1", key: { email: 1 } });
+      coll.failCreate("email_1", conflictError());
+      registerFlongoIndexes({ users: [{ keys: { email: 1 }, options: { unique: true } }] });
+
+      const reports = await syncFlongoIndexes({ reconcile: true, dryRun: true });
+
+      expect(coll.dropIndex).not.toHaveBeenCalled();
+      expect(coll.createIndex).toHaveBeenCalledTimes(1);
+      expect(reports[0].status).toBe("conflict");
+      expect(console.warn).toHaveBeenCalledWith(
+        expect.stringMatching(/would reconcile index users\.email_1/)
+      );
+    });
+
+    it("restores the original index when the rebuild fails", async () => {
+      const coll = getCollection("users");
+      coll.indexes.push({ name: "email_1", key: { email: 1 } });
+      // First create conflicts; the rebuild after the drop hits duplicates.
+      coll.failCreate("email_1", conflictError(), duplicateKeyError());
+      registerFlongoIndexes({ users: [{ keys: { email: 1 }, options: { unique: true } }] });
+
+      const reports = await syncFlongoIndexes({ reconcile: true, onError: "warn" });
+
+      expect(reports[0].status).toBe("failed");
+      expect(reports[0].error).toMatch(/restored/i);
+      // conflict attempt + failed rebuild + restore
+      expect(coll.createIndex).toHaveBeenCalledTimes(3);
+      expect(coll.createIndex).toHaveBeenLastCalledWith({ email: 1 }, { name: "email_1" });
+      const live = await coll.listIndexes().toArray();
+      expect(live.map((i: any) => i.name)).toContain("email_1");
+    });
+
+    it("reports the double failure when the restore also fails", async () => {
+      const coll = getCollection("users");
+      coll.indexes.push({ name: "email_1", key: { email: 1 } });
+      coll.failCreate("email_1", conflictError(), duplicateKeyError(), duplicateKeyError());
+      registerFlongoIndexes({ users: [{ keys: { email: 1 }, options: { unique: true } }] });
+
+      const reports = await syncFlongoIndexes({ reconcile: true, onError: "warn" });
+
+      expect(reports[0].status).toBe("failed");
+      expect(reports[0].error).toMatch(/restor.*also failed/i);
+      expect(reports[0].error).toMatch(/missing this index/i);
+      const live = await coll.listIndexes().toArray();
+      expect(live.map((i: any) => i.name)).not.toContain("email_1");
+    });
+
+    it("drops by the existing index's name when the spec renames it", async () => {
+      const coll = getCollection("users");
+      coll.indexes.push({ name: "email_old", key: { email: 1 } });
+      coll.failCreate("email_unique", conflictError());
+      registerFlongoIndexes({
+        users: [{ keys: { email: 1 }, options: { name: "email_unique", unique: true } }]
+      });
+
+      const reports = await syncFlongoIndexes({ reconcile: true });
+
+      expect(coll.dropIndex).toHaveBeenCalledWith("email_old");
+      expect(reports[0].status).toBe("reconciled");
+      expect(reports[0].name).toBe("email_unique");
+    });
+
+    it("falls back to conflict when no drop target can be identified", async () => {
+      const coll = getCollection("users");
+      coll.failCreate("email_1", conflictError());
+      registerFlongoIndexes({ users: [{ keys: { email: 1 } }] });
+
+      const reports = await syncFlongoIndexes({ reconcile: true, onError: "warn" });
+
+      expect(coll.dropIndex).not.toHaveBeenCalled();
+      expect(reports[0].status).toBe("conflict");
+    });
+
+    it("never reconciles the mandatory _id_ index", async () => {
+      const coll = getCollection("users");
+      coll.failCreate("_id_1", conflictError());
+      registerFlongoIndexes({ users: [{ keys: { _id: 1 } }] });
+
+      const reports = await syncFlongoIndexes({ reconcile: true, onError: "warn" });
+
+      expect(coll.dropIndex).not.toHaveBeenCalled();
+      expect(reports[0].status).toBe("conflict");
+    });
+
+    it("does not reconcile non-conflict failures", async () => {
+      const coll = getCollection("users");
+      coll.indexes.push({ name: "email_1", key: { email: 1 } });
+      coll.failCreate("email_1", duplicateKeyError());
+      registerFlongoIndexes({ users: [{ keys: { email: 1 }, options: { unique: true } }] });
+
+      const reports = await syncFlongoIndexes({ reconcile: true, onError: "warn" });
+
+      expect(coll.dropIndex).not.toHaveBeenCalled();
+      expect(reports[0].status).toBe("failed");
+    });
+
+    it("a successful reconcile does not throw under strict mode", async () => {
+      const coll = getCollection("users");
+      coll.indexes.push({ name: "email_1", key: { email: 1 } });
+      coll.failCreate("email_1", conflictError());
+      registerFlongoIndexes({ users: [{ keys: { email: 1 }, options: { unique: true } }] });
+      setIndexSyncConfig({ mode: "strict", reconcile: true });
+
+      const reports = await syncFlongoIndexes();
+
+      expect(reports[0].status).toBe("reconciled");
     });
   });
 

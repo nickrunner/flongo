@@ -307,7 +307,7 @@ structured report:
 interface FlongoIndexReport {
   collection: string;
   name: string;                                                   // resolved name
-  status: 'created' | 'exists' | 'conflict' | 'failed' | 'pruned';
+  status: 'created' | 'exists' | 'conflict' | 'failed' | 'pruned' | 'reconciled';
   error?: string;
 }
 ```
@@ -315,7 +315,8 @@ interface FlongoIndexReport {
 - **Identical** spec already present → `"exists"` (no-op).
 - **Same keys, different options** → MongoDB throws `IndexOptionsConflict`;
   Flongo records `"conflict"` and honors `onError` (it never silently
-  drops/recreates).
+  drops/recreates). With the `reconcile` opt-in, the existing index is instead
+  dropped and rebuilt from the declared spec → `"reconciled"` (see below).
 - **Creation error** (classic case: a `unique` index over a collection that
   already contains duplicates) → `"failed"` with a message naming the likely
   cause. By default this does **not** crash the process.
@@ -328,7 +329,8 @@ interface FlongoIndexReport {
 | `onError`     | `'warn'` \| `'throw'`           | `'warn'`   | How non-fatal problems are surfaced. `strict` mode always throws. |
 | `background`  | `boolean`                       | `false`    | When `true`, boot does not block on index builds — the sync runs asynchronously and logs its outcome. `await syncFlongoIndexes()` remains available when you want to await. |
 | `prune`       | `boolean`                       | `false`    | Drop indexes present in Mongo but absent from the registry. See below. |
-| `dryRun`      | `boolean`                       | `false`    | With `prune`, log what *would* be dropped without dropping. |
+| `reconcile`   | `boolean`                       | `false`    | Drop + rebuild conflicting indexes from their declared specs. See below. |
+| `dryRun`      | `boolean`                       | `false`    | With `prune`/`reconcile`, log what *would* be dropped (or dropped and rebuilt) without touching anything. |
 
 ### Non-destructive by default & pruning
 
@@ -343,6 +345,39 @@ await syncFlongoIndexes({ prune: true, dryRun: true });
 // Then actually prune
 const report = await syncFlongoIndexes({ prune: true });
 ```
+
+### Reconciling option changes
+
+Changing a declared index's **options** (e.g. adding `unique`, changing a
+partial filter) makes MongoDB reject the `createIndex` with a conflict, since
+an index's options are immutable. By default Flongo reports `"conflict"` and
+leaves the resolution to you. With the `reconcile` opt-in, Flongo evolves the
+index for you: it drops the existing index and rebuilds it from the declared
+spec.
+
+```typescript
+// Dry run first — logs which indexes would be dropped and rebuilt
+await syncFlongoIndexes({ reconcile: true, dryRun: true });
+
+// Then actually reconcile
+const report = await syncFlongoIndexes({ reconcile: true });
+// → [{ collection: 'users', name: 'email_1', status: 'reconciled' }]
+```
+
+Safety properties:
+
+- **Rollback on failure** — if the rebuild fails (e.g. you added `unique` and
+  the collection contains duplicates), the original index is restored from the
+  pre-sync snapshot and the report is `"failed"` with the cause. The collection
+  is never left without the index.
+- **Drops the real index** — the drop targets the server-side index that
+  conflicts (matched by name, or by key pattern if your spec renames it), never
+  a guessed name, and never `_id_`.
+
+⚠️ **Rebuild window**: between the drop and the completed rebuild, queries
+can't use the index and `unique` is not enforced. For large collections or
+strict uniqueness requirements, prefer running reconcile during a maintenance
+window rather than on every boot.
 
 ### Verifying indexes
 

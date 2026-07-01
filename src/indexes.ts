@@ -95,14 +95,30 @@ export interface IndexSyncOptions {
    */
   prune?: boolean;
   /**
-   * When pruning, log the indexes that *would* be dropped without dropping
-   * them. Off by default.
+   * When `true`, resolve index conflicts (an index with the same identity
+   * already exists with different options or keys) by dropping the existing
+   * index and rebuilding it from the declared spec. If the rebuild fails, the
+   * original index is restored from the pre-sync snapshot so the collection is
+   * never left without it. Note the rebuild window: while the index is being
+   * rebuilt, queries can't use it and `unique` is not enforced. Opt-in and off
+   * by default; never touches `_id_`. See also `dryRun`.
+   */
+  reconcile?: boolean;
+  /**
+   * When pruning or reconciling, log the indexes that *would* be dropped (or
+   * dropped and rebuilt) without touching them. Off by default.
    */
   dryRun?: boolean;
 }
 
-/** The outcome of ensuring (or pruning) a single index. */
-export type FlongoIndexStatus = "created" | "exists" | "conflict" | "failed" | "pruned";
+/** The outcome of ensuring (or pruning/reconciling) a single index. */
+export type FlongoIndexStatus =
+  | "created"
+  | "exists"
+  | "conflict"
+  | "failed"
+  | "pruned"
+  | "reconciled";
 
 /** A structured, per-index result from {@link syncFlongoIndexes}. */
 export interface FlongoIndexReport {
@@ -124,7 +140,9 @@ export interface SyncFlongoIndexesOptions {
   onError?: IndexSyncOnError;
   /** Drop out-of-registry indexes (never `_id_`). */
   prune?: boolean;
-  /** With `prune`, log candidates without dropping. */
+  /** Drop + rebuild conflicting indexes from their declared specs (never `_id_`). */
+  reconcile?: boolean;
+  /** With `prune`/`reconcile`, log candidates without dropping. */
   dryRun?: boolean;
 }
 
@@ -225,6 +243,124 @@ function describeFailure(err: any): string {
   return base;
 }
 
+/** Order-sensitive equality between an existing index's key doc and a spec's keys. */
+function sameKeyPattern(
+  existingKey: Document,
+  specKeys: Record<string, FlongoIndexKeyType>
+): boolean {
+  const a = Object.entries(existingKey ?? {});
+  const b = Object.entries(specKeys);
+  return a.length === b.length && a.every(([field, type], i) => b[i][0] === field && b[i][1] === type);
+}
+
+/**
+ * Finds the existing index a conflicting spec collides with: same resolved
+ * name, or (for an explicitly renamed spec) the same key pattern under another
+ * name. The server-side index is the identity that must be dropped to
+ * reconcile — not the spec's resolved name, which may not exist yet.
+ */
+function findConflictingIndex(
+  existing: Document[],
+  spec: FlongoIndexSpec
+): Document | undefined {
+  const name = resolveIndexName(spec);
+  return (
+    existing.find((i) => i.name === name) ??
+    existing.find((i) => sameKeyPattern(i.key as Document, spec.keys))
+  );
+}
+
+/**
+ * Rebuilds `createIndex` options from a `listIndexes` document so a dropped
+ * index can be restored verbatim, minus the server-managed fields that
+ * `createIndex` does not accept back.
+ */
+function restoreOptionsFromIndexDoc(doc: Document): Document {
+  const options: Document = {};
+  for (const [field, value] of Object.entries(doc)) {
+    if (field !== "v" && field !== "key" && field !== "ns" && field !== "background") {
+      options[field] = value;
+    }
+  }
+  return options;
+}
+
+/**
+ * Attempts to reconcile a conflicting spec by dropping the existing index and
+ * rebuilding it from the declaration. If the rebuild fails, the original index
+ * is restored from the pre-sync snapshot so the collection is never left
+ * without it. Returns the report for the attempt, or `undefined` when there is
+ * no safely identifiable drop target (or the target is `_id_`, or this is a
+ * dry run), in which case the caller falls back to plain conflict handling.
+ */
+async function reconcileIndex(
+  collection: Collection,
+  collectionName: string,
+  spec: FlongoIndexSpec,
+  existing: Document[],
+  dryRun: boolean
+): Promise<FlongoIndexReport | undefined> {
+  const target = findConflictingIndex(existing, spec);
+  if (!target || target.name === "_id_") {
+    return undefined;
+  }
+  const targetName = target.name as string;
+  const resolvedName = resolveIndexName(spec);
+
+  if (dryRun) {
+    console.warn(
+      `[flongo] [dry-run] would reconcile index ${collectionName}.${targetName} (drop + rebuild as ${resolvedName})`
+    );
+    return undefined;
+  }
+
+  try {
+    await collection.dropIndex(targetName);
+  } catch (err: any) {
+    return {
+      collection: collectionName,
+      name: targetName,
+      status: "failed",
+      error: `reconcile could not drop existing index: ${err?.message ?? String(err)}`
+    };
+  }
+
+  try {
+    const createdName = await collection.createIndex(
+      spec.keys as any,
+      (spec.options ?? {}) as any
+    );
+    console.warn(
+      `[flongo] Reconciled index ${collectionName}.${createdName ?? resolvedName} (dropped ${targetName}, rebuilt with declared options)`
+    );
+    return {
+      collection: collectionName,
+      name: createdName ?? resolvedName,
+      status: "reconciled"
+    };
+  } catch (err: any) {
+    const rebuildFailure = describeFailure(err);
+    // The old index is already gone; restore it rather than leaving the
+    // collection with no index at all.
+    try {
+      await collection.createIndex(target.key as any, restoreOptionsFromIndexDoc(target) as any);
+      return {
+        collection: collectionName,
+        name: resolvedName,
+        status: "failed",
+        error: `reconcile rebuild failed; original index ${targetName} was restored — ${rebuildFailure}`
+      };
+    } catch (restoreErr: any) {
+      return {
+        collection: collectionName,
+        name: resolvedName,
+        status: "failed",
+        error: `reconcile rebuild failed and restoring ${targetName} also failed — the collection is currently missing this index. Rebuild: ${rebuildFailure}; restore: ${restoreErr?.message ?? String(restoreErr)}`
+      };
+    }
+  }
+}
+
 /** Logs a one-line summary of a sync run, grouped by status. */
 function logSummary(reports: FlongoIndexReport[]): void {
   const counts: Record<string, number> = {};
@@ -248,16 +384,18 @@ function logSummary(reports: FlongoIndexReport[]): void {
  * For each spec, calls `createIndex(keys, options)`:
  * - identical spec already present → `"exists"` (no-op);
  * - same keys with different options → Mongo throws a conflict, recorded as
- *   `"conflict"` (never silently dropped/recreated);
+ *   `"conflict"` (never silently dropped/recreated) — unless `reconcile` is on,
+ *   in which case the existing index is dropped and rebuilt from the spec
+ *   (`"reconciled"`), with the original restored if the rebuild fails;
  * - other creation errors (e.g. a unique index over existing duplicates) →
  *   `"failed"` with a diagnostic message.
  *
  * `mode`/`onError` are read from the `indexSync` config unless overridden here.
  * `strict` mode forces `onError: "throw"`. With `prune`, indexes present in
  * Mongo but absent from the registry are dropped (never `_id_`); `dryRun` logs
- * candidates without dropping.
+ * prune/reconcile candidates without dropping.
  *
- * @param opts - Per-call overrides for mode, onError, prune, and dryRun.
+ * @param opts - Per-call overrides for mode, onError, prune, reconcile, and dryRun.
  * @returns One {@link FlongoIndexReport} per ensured (and pruned) index.
  */
 export async function syncFlongoIndexes(
@@ -266,6 +404,7 @@ export async function syncFlongoIndexes(
   const cfg = getIndexSyncConfig();
   const mode: IndexSyncMode = opts.mode ?? cfg.mode ?? "ensure";
   const prune = opts.prune ?? cfg.prune ?? false;
+  const reconcile = opts.reconcile ?? cfg.reconcile ?? false;
   const dryRun = opts.dryRun ?? cfg.dryRun ?? false;
   // Strict mode always throws; otherwise honor the configured/overridden policy.
   const onError: IndexSyncOnError =
@@ -304,6 +443,17 @@ export async function syncFlongoIndexes(
         });
       } catch (err: any) {
         const conflict = isConflictError(err);
+        if (conflict && reconcile) {
+          const report = await reconcileIndex(collection, collectionName, spec, existing, dryRun);
+          if (report) {
+            reports.push(report);
+            if (report.status === "failed") {
+              raise("failed", collectionName, report.name, report.error ?? "reconcile failed");
+            }
+            continue;
+          }
+          // No safe drop target (or dry run): fall through to plain conflict handling.
+        }
         const status: FlongoIndexStatus = conflict ? "conflict" : "failed";
         const message = conflict
           ? err?.message ?? "index options conflict"
