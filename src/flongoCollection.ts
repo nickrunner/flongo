@@ -1,8 +1,53 @@
 import { flongoDb } from "./flongo";
 import { FlongoQuery } from "./flongoQuery";
 import { Entity, Event, EventName, EventRecord, Pagination, Repository } from "./types";
-import { Collection, Filter, FindOptions, ObjectId, OptionalUnlessRequiredId } from "mongodb";
-import { Error404 } from "./errors";
+import { Collection, Document, Filter, FindOptions, ObjectId, OptionalUnlessRequiredId } from "mongodb";
+import { Error400, Error404 } from "./errors";
+
+/**
+ * Memoized MongoDB major version for the active `flongoDb` connection. Keyed by
+ * the `flongoDb` reference so a reconnect (which replaces `flongoDb`) misses the
+ * cache and transparently re-checks; shared across all FlongoCollection
+ * instances on the same connection so `orderByRandom` costs at most one
+ * `buildInfo` round-trip per connection.
+ */
+let cachedServerMajor: { db: unknown; promise: Promise<number> } | undefined;
+
+/**
+ * Resolves the connected server's major version, memoized per connection.
+ * Concurrent callers share a single in-flight `buildInfo`; a failed check is not
+ * cached so the next call retries.
+ */
+function getServerMajorVersion(): Promise<number> {
+  if (cachedServerMajor && cachedServerMajor.db === flongoDb) {
+    return cachedServerMajor.promise;
+  }
+
+  const promise = (async () => {
+    const info = await flongoDb.command({ buildInfo: 1 });
+    return Array.isArray(info.versionArray)
+      ? Number(info.versionArray[0])
+      : parseInt(String(info.version), 10);
+  })();
+
+  // Don't cache a transient failure — allow the next call to retry.
+  promise.catch(() => {
+    if (cachedServerMajor?.promise === promise) {
+      cachedServerMajor = undefined;
+    }
+  });
+
+  cachedServerMajor = { db: flongoDb, promise };
+  return promise;
+}
+
+/**
+ * Clears the memoized per-connection server-version check. Exported for tests;
+ * production code relies on the connection-keyed cache invalidating itself.
+ */
+export function __resetServerVersionCache(): void {
+  cachedServerMajor = undefined;
+}
 
 /**
  * Configuration options for FlongoCollection instances
@@ -114,6 +159,12 @@ export class FlongoCollection<T> {
    * @returns Promise resolving to array of documents
    */
   async getAll(query?: FlongoQuery, pagination?: Pagination): Promise<(Entity & T)[]> {
+    // A seeded random sort can't be expressed with find().sort() — it sorts by a
+    // computed per-document value, so it routes through an aggregation pipeline.
+    if (query?.hasRandomSort()) {
+      return this.getAllRandom(query, pagination);
+    }
+
     const mongodbQuery: Filter<Entity & T> = query?.build() ?? {};
     const mongodbOptions: FindOptions<Entity & T> =
       query?.buildOptions(pagination) ?? new FlongoQuery().buildOptions(pagination);
@@ -127,6 +178,56 @@ export class FlongoCollection<T> {
   }
 
   /**
+   * Executes a query carrying an `orderByRandom` via an aggregation pipeline.
+   * Verifies the server supports `$toHashedIndexKey` (MongoDB >= 8.0) first so
+   * callers get an actionable error rather than a raw driver failure.
+   * @private
+   */
+  private async getAllRandom(query: FlongoQuery, pagination?: Pagination): Promise<(Entity & T)[]> {
+    await this.assertRandomSortSupported();
+    const pipeline = query.buildPipeline<Entity & T>(pagination);
+    const res = await this.collection.aggregate(pipeline).toArray();
+    return res.map((d) => this.toEntity(d));
+  }
+
+  /**
+   * Runs a raw aggregation pipeline against this collection and returns the
+   * documents with their `_id` normalized to a string (Entity form). A low-level
+   * escape hatch for computed-field sorts/rankings that the fluent builder does
+   * not yet cover; `orderByRandom` is built on the same execution path.
+   * @param pipeline - MongoDB aggregation pipeline stages
+   * @returns Promise resolving to the aggregated documents in Entity form
+   */
+  async aggregate(pipeline: Document[]): Promise<(Entity & T)[]> {
+    const res = await this.collection.aggregate(pipeline).toArray();
+    return res.map((d) => this.toEntity(d));
+  }
+
+  /**
+   * Throws a clear, actionable error when the connected MongoDB server predates
+   * the `$toHashedIndexKey` operator that `orderByRandom` relies on (added in
+   * 8.0), instead of letting an unrecognized-operator driver error surface.
+   * @private
+   */
+  private async assertRandomSortSupported(): Promise<void> {
+    let major: number;
+    try {
+      major = await getServerMajorVersion();
+    } catch (err) {
+      console.error("Failed to verify MongoDB server version for orderByRandom: ", err);
+      throw new Error400(
+        "orderByRandom() could not verify the MongoDB server version. It requires MongoDB server >= 8.0 (uses $toHashedIndexKey)."
+      );
+    }
+
+    if (!(major >= 8)) {
+      throw new Error400(
+        `orderByRandom() requires MongoDB server >= 8.0 (uses $toHashedIndexKey), but the connected server is ${major}.x.`
+      );
+    }
+  }
+
+  /**
    * Retrieves a subset of documents with required query and pagination
    * Similar to getAll but requires both query and pagination parameters
    * @param query - FlongoQuery for filtering (required)
@@ -134,6 +235,11 @@ export class FlongoCollection<T> {
    * @returns Promise resolving to array of documents
    */
   async getSome(query: FlongoQuery, pagination: Pagination): Promise<(Entity & T)[]> {
+    // Mirror getAll: a seeded random sort routes through the aggregation path.
+    if (query?.hasRandomSort()) {
+      return this.getAllRandom(query, pagination);
+    }
+
     const mongodbQuery: Filter<Entity & T> = query?.build();
     const mongodbOptions: FindOptions<Entity & T> = query?.buildOptions(pagination);
 

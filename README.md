@@ -118,6 +118,55 @@ const page = await collection.getAll(
 );
 ```
 
+#### Seeded random sort (`orderByRandom`)
+
+`orderByRandom(seed)` adds a **deterministic, seeded shuffle** for fair, rotating
+list/browse orderings (e.g. a public directory with no meaningful ranking yet).
+Given the same seed it produces the **same order on every call**, so `$skip`/`$limit`
+pagination stays gapless and non-overlapping across pages; change the seed and the
+whole set reshuffles.
+
+```typescript
+const DAY_MS = 24 * 60 * 60 * 1000;
+// Caller owns the rotation policy. Here: a new shuffle each day. Pin the seed for
+// a browsing session (capture on first load, echo back per page) so paging is stable
+// and rotation only affects new sessions.
+const seed = sessionSeed ?? Math.floor(Date.now() / DAY_MS);
+
+const query = new FlongoQuery()
+  .where('enable').eq(true)
+  .orderBy('featured', SortDirection.Descending) // pinned groups stay on top
+  .orderByRandom(seed);                          // shuffle within each featured tier
+
+const page = await stays.getAll(query, { offset: 0, count: 24 }); // stable, fair
+```
+
+- **Composable** with `orderBy`/`thenBy`: sort keys apply in call order and the
+  shuffle slots in at *its* call position. `_id` is always appended as a final
+  tiebreaker, so pages are gapless even under hash collisions.
+- **Seed is caller-owned** — Flongo does not decide rotation cadence. Pass a
+  time-bucketed seed for rotation, optionally mixed with a session/user id. Number
+  and string seeds are normalized to a string, so `1` and `'1'` are equivalent.
+- **Execution**: a query carrying `orderByRandom` runs via an aggregation pipeline
+  (using `$toHashedIndexKey`) instead of `find` — the `getAll`/`getSome` signatures
+  and return types are unchanged. **Requires MongoDB server ≥ 8.0**; on older
+  servers `orderByRandom` fails fast with an actionable error.
+
+#### Raw aggregation escape hatch
+
+For computed-field sorts/rankings the fluent builder doesn't cover yet,
+`FlongoCollection.aggregate(pipeline)` runs a raw MongoDB aggregation pipeline and
+returns documents in Entity form (`_id` normalized to a string):
+
+```typescript
+const topRated = await products.aggregate([
+  { $match: { inStock: true } },
+  { $addFields: { score: { $multiply: ['$rating', '$reviewCount'] } } },
+  { $sort: { score: -1 } },
+  { $limit: 10 }
+]);
+```
+
 ### Collection Operations
 
 ```typescript

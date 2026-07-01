@@ -41,6 +41,25 @@ export class FlongoQuery implements ICollectionQuery {
   public sorts: Sort[] = [];
 
   /**
+   * Normalized seed for a deterministic random sort, set by `orderByRandom()`.
+   * `undefined` means the query has no random sort and executes via the normal
+   * `find` path. When present, the query must execute via an aggregation
+   * pipeline (see `buildPipeline`). Requires MongoDB server >= 8.0.
+   */
+  public randomSeed?: string;
+
+  /**
+   * The position of the random sort within the sort-key order, captured as
+   * `sorts.length` at the time `orderByRandom()` was called. Explicit sort keys
+   * added before this index sort ahead of the shuffle; those added at/after it
+   * sort behind it. `undefined` when there is no random sort.
+   */
+  public randomSortPosition?: number;
+
+  /** Internal computed field used to carry the per-document shuffle hash. */
+  public static readonly SHUFFLE_FIELD = "__flongoShuffle";
+
+  /**
    * Primary sort field, derived from `sorts[0]`.
    * @deprecated Retained for backward compatibility; use `sorts`.
    */
@@ -460,6 +479,51 @@ export class FlongoQuery implements ICollectionQuery {
     return this;
   }
 
+  /**
+   * Adds a deterministic, seeded random sort. Given the same seed the produced
+   * order is identical on every call, so `$skip`/`$limit` pagination stays
+   * gapless and non-overlapping across pages; change the seed and the whole set
+   * reshuffles. This is what enables fair, rotating list/browse orderings.
+   *
+   * Composes with `orderBy`/`thenBy`: sort keys apply in call order and the
+   * shuffle slots in at the position of *this* call, so
+   * `orderBy('featured', Descending).orderByRandom(seed)` pins featured docs to
+   * the top and shuffles within each tier. `_id` is always appended as a final
+   * tiebreaker so a total order (and therefore stable paging) is guaranteed even
+   * under hash collisions. Calling this alone shuffles the whole result set.
+   *
+   * The seed is caller-owned — Flongo does not decide rotation policy. Pass e.g.
+   * `Math.floor(Date.now() / DAY_MS)` for daily rotation, optionally mixed with a
+   * session/user id. Number and string seeds are normalized to a string, so `1`
+   * and `'1'` produce the same order.
+   *
+   * Implemented natively via the `$toHashedIndexKey` aggregation operator, so a
+   * query carrying a random sort executes via an aggregation pipeline instead of
+   * `find`. **Requires MongoDB server >= 8.0.**
+   *
+   * @example
+   * new FlongoQuery()
+   *   .where('enable').eq(true)
+   *   .orderBy('featured', SortDirection.Descending)
+   *   .orderByRandom(seed);
+   *
+   * @param seed - Seed controlling the shuffle (number or string)
+   * @returns This query instance for chaining
+   */
+  public orderByRandom(seed: number | string): FlongoQuery {
+    this.randomSeed = String(seed);
+    this.randomSortPosition = this.sorts.length;
+    return this;
+  }
+
+  /**
+   * Whether this query carries a random sort and must execute via an aggregation
+   * pipeline (`buildPipeline`) rather than the normal `find` path.
+   */
+  public hasRandomSort(): boolean {
+    return this.randomSeed !== undefined;
+  }
+
   // ===========================================
   // LOGICAL OPERATORS
   // ===========================================
@@ -609,6 +673,83 @@ export class FlongoQuery implements ICollectionQuery {
     }
 
     return mongodbOptions;
+  }
+
+  /**
+   * Builds the ordered `$sort` specification for the aggregation path, weaving
+   * the internal shuffle field in at its call position amongst the explicit
+   * sort keys and always appending `_id` as a final tiebreaker. Only used when
+   * a random sort is present.
+   * @private
+   */
+  private buildAggregationSort(): Record<string, 1 | -1> {
+    const sort: Record<string, 1 | -1> = {};
+    const addShuffle = () => {
+      sort[FlongoQuery.SHUFFLE_FIELD] = 1;
+    };
+
+    // Iterate the raw sort keys so the random slot lands at the exact index it
+    // was declared at (positions are captured against the unfiltered array).
+    this.sorts.forEach((s, i) => {
+      if (i === this.randomSortPosition) {
+        addShuffle();
+      }
+      if (s.field && s.direction) {
+        sort[s.field] = s.direction === SortDirection.Ascending ? 1 : -1;
+      }
+    });
+
+    // Random sort declared at or after the last explicit key.
+    if (this.randomSortPosition !== undefined && this.randomSortPosition >= this.sorts.length) {
+      addShuffle();
+    }
+
+    // Final tiebreaker guarantees a total order (gapless pages under collisions).
+    if (!("_id" in sort)) {
+      sort["_id"] = 1;
+    }
+
+    return sort;
+  }
+
+  /**
+   * Compiles this query into an aggregation pipeline that materializes the same
+   * results as `find` would, but ordered by a deterministic per-document shuffle
+   * (see `orderByRandom`). The `$match` stage is exactly what `find` receives
+   * today (`build()`), so all filter logic and indexes carry over unchanged;
+   * `$skip`/`$limit` are applied *after* the deterministic sort, which is what
+   * makes paging stable.
+   *
+   * **Requires MongoDB server >= 8.0** (uses `$toHashedIndexKey`).
+   *
+   * @param pagination - Optional pagination settings
+   * @returns MongoDB aggregation pipeline stages
+   */
+  public buildPipeline<T>(pagination?: Pagination): Document[] {
+    const pipeline: Document[] = [{ $match: this.build<T>() }];
+
+    // Hash the full `_id` string mixed with the seed. Hashing the whole _id
+    // decorrelates the order from the ObjectId timestamp prefix, so newer docs
+    // aren't biased toward one end of the shuffle.
+    pipeline.push({
+      $addFields: {
+        [FlongoQuery.SHUFFLE_FIELD]: {
+          $toHashedIndexKey: { $concat: [{ $toString: "$_id" }, ":", this.randomSeed] }
+        }
+      }
+    });
+
+    pipeline.push({ $sort: this.buildAggregationSort() });
+
+    if (pagination) {
+      pipeline.push({ $skip: pagination.offset });
+      pipeline.push({ $limit: pagination.count });
+    }
+
+    // Don't leak the internal shuffle field to callers.
+    pipeline.push({ $project: { [FlongoQuery.SHUFFLE_FIELD]: 0 } });
+
+    return pipeline;
   }
 }
 

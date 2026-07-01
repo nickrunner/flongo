@@ -488,6 +488,112 @@ describe("FlongoQuery", () => {
     });
   });
 
+  describe("Random sort (orderByRandom)", () => {
+    const SHUFFLE = FlongoQuery.SHUFFLE_FIELD;
+
+    // Extract the single-key operator stage of the given type from a pipeline.
+    const stage = (pipeline: any[], key: string) => pipeline.find((s) => key in s)?.[key];
+
+    it("should not carry a random sort by default", () => {
+      expect(query.hasRandomSort()).toBe(false);
+    });
+
+    it("should flag a random sort once orderByRandom is called", () => {
+      query.orderByRandom(42);
+      expect(query.hasRandomSort()).toBe(true);
+    });
+
+    it("should normalize number and string seeds to the same hash input", () => {
+      const num = new FlongoQuery().orderByRandom(1).buildPipeline();
+      const str = new FlongoQuery().orderByRandom("1").buildPipeline();
+      expect(stage(num, "$addFields")).toEqual(stage(str, "$addFields"));
+    });
+
+    it("should build a pipeline: match, addFields hash, sort, project", () => {
+      const pipeline = query.where("enable").eq(true).orderByRandom("seed-1").buildPipeline();
+
+      expect(stage(pipeline, "$match")).toEqual({ enable: { $eq: true } });
+      expect(stage(pipeline, "$addFields")).toEqual({
+        [SHUFFLE]: {
+          $toHashedIndexKey: { $concat: [{ $toString: "$_id" }, ":", "seed-1"] }
+        }
+      });
+      // No pagination supplied -> no skip/limit stages.
+      expect(stage(pipeline, "$skip")).toBeUndefined();
+      expect(stage(pipeline, "$limit")).toBeUndefined();
+      // Internal shuffle field is projected out.
+      expect(stage(pipeline, "$project")).toEqual({ [SHUFFLE]: 0 });
+    });
+
+    it("should shuffle the whole set with _id as final tiebreaker when alone", () => {
+      const pipeline = query.orderByRandom(7).buildPipeline();
+      expect(stage(pipeline, "$sort")).toEqual({ [SHUFFLE]: 1, _id: 1 });
+      expect(Object.keys(stage(pipeline, "$sort"))).toEqual([SHUFFLE, "_id"]);
+    });
+
+    it("should slot the shuffle after explicit sort keys declared before it", () => {
+      const pipeline = query
+        .orderBy("featured", SortDirection.Descending)
+        .orderByRandom(7)
+        .buildPipeline();
+
+      // featured pinned on top, shuffle within each tier, _id last.
+      expect(Object.keys(stage(pipeline, "$sort"))).toEqual(["featured", SHUFFLE, "_id"]);
+      expect(stage(pipeline, "$sort")).toEqual({ featured: -1, [SHUFFLE]: 1, _id: 1 });
+    });
+
+    it("should slot the shuffle at its call position amongst mixed sort keys", () => {
+      const pipeline = query
+        .orderBy("featured", SortDirection.Descending)
+        .orderByRandom(7)
+        .thenBy("name", SortDirection.Ascending)
+        .buildPipeline();
+
+      // Call order: featured, random, name -> then _id tiebreaker.
+      expect(Object.keys(stage(pipeline, "$sort"))).toEqual([
+        "featured",
+        SHUFFLE,
+        "name",
+        "_id"
+      ]);
+    });
+
+    it("should not duplicate _id if it is already an explicit sort key", () => {
+      const pipeline = query
+        .orderByRandom(7)
+        .thenBy("_id", SortDirection.Descending)
+        .buildPipeline();
+
+      const sort = stage(pipeline, "$sort");
+      expect(Object.keys(sort)).toEqual([SHUFFLE, "_id"]);
+      // Explicit _id direction is preserved (not overwritten by the tiebreaker).
+      expect(sort._id).toBe(-1);
+    });
+
+    it("should append skip/limit after the sort when paginated", () => {
+      const pipeline = query.orderByRandom(7).buildPipeline({ offset: 20, count: 10 });
+
+      expect(stage(pipeline, "$skip")).toBe(20);
+      expect(stage(pipeline, "$limit")).toBe(10);
+      // Ordering matters: sort must precede skip/limit for stable paging.
+      const idx = (k: string) => pipeline.findIndex((s) => k in s);
+      expect(idx("$sort")).toBeLessThan(idx("$skip"));
+      expect(idx("$skip")).toBeLessThan(idx("$limit"));
+    });
+
+    it("should be deterministic: identical query+seed yields identical pipeline", () => {
+      const a = new FlongoQuery().where("enable").eq(true).orderByRandom(99).buildPipeline();
+      const b = new FlongoQuery().where("enable").eq(true).orderByRandom(99).buildPipeline();
+      expect(a).toEqual(b);
+    });
+
+    it("should reshuffle when the seed changes", () => {
+      const a = new FlongoQuery().orderByRandom(1).buildPipeline();
+      const b = new FlongoQuery().orderByRandom(2).buildPipeline();
+      expect(stage(a, "$addFields")).not.toEqual(stage(b, "$addFields"));
+    });
+  });
+
   describe("Pagination", () => {
     it("should build pagination options", () => {
       const pagination = { offset: 10, count: 20 };

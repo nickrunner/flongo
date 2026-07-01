@@ -11,6 +11,9 @@ export const createMockCollection = () => {
       skip: vi.fn().mockReturnThis(),
       sort: vi.fn().mockReturnThis()
     })),
+    aggregate: vi.fn(() => ({
+      toArray: vi.fn()
+    })),
     insertOne: vi.fn(),
     insertMany: vi.fn(),
     updateOne: vi.fn(),
@@ -27,7 +30,8 @@ export const createMockDb = () => {
   const mockCollection = createMockCollection();
 
   return {
-    collection: vi.fn(() => mockCollection)
+    collection: vi.fn(() => mockCollection),
+    command: vi.fn().mockResolvedValue({ version: "8.0.0", versionArray: [8, 0, 0, 0] })
   } as any;
 };
 

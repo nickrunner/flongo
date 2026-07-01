@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, MockedFunction } from 'vitest';
 import { ObjectId } from 'mongodb';
-import { FlongoCollection } from '../flongoCollection';
+import { FlongoCollection, __resetServerVersionCache } from '../flongoCollection';
 import { FlongoQuery } from '../flongoQuery';
 import { EventName } from '../types';
 import { Error404 } from '../errors';
@@ -16,6 +16,9 @@ vi.mock('../flongo', () => {
       skip: vi.fn().mockReturnThis(),
       sort: vi.fn().mockReturnThis()
     })),
+    aggregate: vi.fn(() => ({
+      toArray: vi.fn()
+    })),
     insertOne: vi.fn(),
     insertMany: vi.fn(),
     updateOne: vi.fn(),
@@ -27,7 +30,8 @@ vi.mock('../flongo', () => {
   };
 
   const mockDb = {
-    collection: vi.fn(() => mockCollection)
+    collection: vi.fn(() => mockCollection),
+    command: vi.fn()
   };
 
   return {
@@ -58,9 +62,14 @@ describe('FlongoCollection', () => {
       sort: vi.fn().mockReturnThis()
     };
     
+    const mockAggregateCursor = {
+      toArray: vi.fn().mockResolvedValue([])
+    };
+
     mockCollection = {
       findOne: vi.fn(),
       find: vi.fn(() => mockCursor),
+      aggregate: vi.fn(() => mockAggregateCursor),
       insertOne: vi.fn().mockResolvedValue({ insertedId: 'mock-id' }),
       insertMany: vi.fn().mockResolvedValue({ insertedIds: [] }),
       updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
@@ -82,6 +91,13 @@ describe('FlongoCollection', () => {
       }
       return mockCollection;
     });
+
+    // Default to a MongoDB 8.0 server so orderByRandom's version guard passes.
+    mockDb.command = vi.fn().mockResolvedValue({ version: '8.0.4', versionArray: [8, 0, 4, 0] });
+
+    // The server-version check is memoized per connection; clear it so each test
+    // starts from a cold cache.
+    __resetServerVersionCache();
 
     collection = new FlongoCollection<TestUser>('users');
   });
@@ -193,6 +209,122 @@ describe('FlongoCollection', () => {
         mockCollection.find().toArray.mockRejectedValue(error);
 
         await expect(collection.getAll()).rejects.toThrow('Database error');
+      });
+    });
+
+    describe('getAll with orderByRandom (aggregation path)', () => {
+      it('should execute via aggregate, not find, when a random sort is present', async () => {
+        const mockUsers = sampleUsersWithIds;
+        mockCollection.aggregate().toArray.mockResolvedValue(mockUsers);
+        mockCollection.aggregate.mockClear(); // discard the setup-call above
+
+        const query = new FlongoQuery().where('enable').eq(true).orderByRandom(42);
+        const result = await collection.getAll(query, { offset: 0, count: 2 });
+
+        expect(mockCollection.find).not.toHaveBeenCalled();
+        expect(mockCollection.aggregate).toHaveBeenCalledTimes(1);
+        expect(result).toEqual(mockUsers);
+      });
+
+      it('should pass the compiled pipeline to aggregate', async () => {
+        mockCollection.aggregate().toArray.mockResolvedValue([]);
+        mockCollection.aggregate.mockClear();
+
+        const query = new FlongoQuery().where('enable').eq(true).orderByRandom('seed-1');
+        await collection.getAll(query, { offset: 20, count: 10 });
+
+        const pipeline = mockCollection.aggregate.mock.calls[0][0];
+        expect(pipeline).toEqual(query.buildPipeline({ offset: 20, count: 10 }));
+        expect(pipeline).toContainEqual({ $skip: 20 });
+        expect(pipeline).toContainEqual({ $limit: 10 });
+      });
+
+      it('should check the server version before aggregating', async () => {
+        mockCollection.aggregate().toArray.mockResolvedValue([]);
+
+        const query = new FlongoQuery().orderByRandom(1);
+        await collection.getAll(query);
+
+        expect(mockDb.command).toHaveBeenCalledWith({ buildInfo: 1 });
+      });
+
+      it('should memoize the version check across calls and collections on one connection', async () => {
+        mockCollection.aggregate().toArray.mockResolvedValue([]);
+
+        await collection.getAll(new FlongoQuery().orderByRandom(1));
+        await collection.getAll(new FlongoQuery().orderByRandom(2));
+        // A second collection on the same connection reuses the cached version.
+        const other = new FlongoCollection<TestUser>('other');
+        await other.getAll(new FlongoQuery().orderByRandom(3));
+
+        expect(mockDb.command).toHaveBeenCalledTimes(1);
+      });
+
+      it('should retry the version check after a failed lookup (failures not cached)', async () => {
+        mockCollection.aggregate().toArray.mockResolvedValue([]);
+        mockDb.command
+          .mockRejectedValueOnce(new Error('transient'))
+          .mockResolvedValueOnce({ version: '8.0.4', versionArray: [8, 0, 4, 0] });
+
+        await expect(collection.getAll(new FlongoQuery().orderByRandom(1))).rejects.toThrow(
+          /orderByRandom/
+        );
+        // Next call re-checks rather than reusing the failed result.
+        await expect(collection.getAll(new FlongoQuery().orderByRandom(1))).resolves.toEqual([]);
+        expect(mockDb.command).toHaveBeenCalledTimes(2);
+      });
+
+      it('should throw an actionable error on MongoDB < 8.0', async () => {
+        mockDb.command.mockResolvedValue({ version: '7.0.5', versionArray: [7, 0, 5, 0] });
+
+        const query = new FlongoQuery().orderByRandom(1);
+
+        await expect(collection.getAll(query)).rejects.toThrow(/8\.0/);
+        // Version guard should short-circuit before touching aggregate.
+        expect(mockCollection.aggregate).not.toHaveBeenCalled();
+      });
+
+      it('should throw a wrapped error if the version check itself fails', async () => {
+        mockDb.command.mockRejectedValue(new Error('not authorized'));
+
+        const query = new FlongoQuery().orderByRandom(1);
+
+        await expect(collection.getAll(query)).rejects.toThrow(/orderByRandom/);
+        expect(mockCollection.aggregate).not.toHaveBeenCalled();
+      });
+
+      it('should derive the major version from `version` when versionArray is absent', async () => {
+        mockDb.command.mockResolvedValue({ version: '8.0.4' });
+        mockCollection.aggregate().toArray.mockResolvedValue([]);
+
+        const query = new FlongoQuery().orderByRandom(1);
+        await expect(collection.getAll(query)).resolves.toEqual([]);
+      });
+
+      it('should route getSome through the aggregation path too', async () => {
+        mockCollection.aggregate().toArray.mockResolvedValue(sampleUsersWithIds);
+        mockCollection.aggregate.mockClear();
+
+        const query = new FlongoQuery().where('enable').eq(true).orderByRandom(5);
+        const result = await collection.getSome(query, { offset: 0, count: 3 });
+
+        expect(mockCollection.aggregate).toHaveBeenCalledTimes(1);
+        expect(mockCollection.find).not.toHaveBeenCalled();
+        expect(result).toEqual(sampleUsersWithIds);
+      });
+    });
+
+    describe('aggregate (escape hatch)', () => {
+      it('should run a raw pipeline and normalize _id to a string', async () => {
+        const rawDoc = { _id: new ObjectId('507f1f77bcf86cd799439011'), name: 'Zed' };
+        mockCollection.aggregate().toArray.mockResolvedValue([rawDoc]);
+
+        const pipeline = [{ $match: { name: 'Zed' } }];
+        const result = await collection.aggregate(pipeline);
+
+        expect(mockCollection.aggregate).toHaveBeenCalledWith(pipeline);
+        expect(result[0]._id).toBe('507f1f77bcf86cd799439011');
+        expect(typeof result[0]._id).toBe('string');
       });
     });
 
