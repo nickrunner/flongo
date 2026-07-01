@@ -326,35 +326,46 @@ describe("Integration Tests", () => {
 
   describe("End-to-End CRUD Operations", () => {
     it("should perform complete CRUD lifecycle", async () => {
-      // CREATE
-      const newUser = sampleUsers[0];
-      const createdUser = await collection.create(newUser, "client123");
+      // Make timestamps deterministic and strictly increasing: create and update
+      // both stamp Date.now(), which can collide within the same millisecond and
+      // flake the updatedAt assertion below. Advancing a fake clock on every call
+      // guarantees update's updatedAt is strictly greater than create's.
+      let clock = 1_000_000_000_000;
+      const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (clock += 1000));
 
-      expect(createdUser).toMatchObject({
-        ...newUser,
-        _id: expect.any(String),
-        createdAt: expect.any(Number),
-        updatedAt: expect.any(Number)
-      });
+      try {
+        // CREATE
+        const newUser = sampleUsers[0];
+        const createdUser = await collection.create(newUser, "client123");
 
-      // READ
-      const fetchedUser = await collection.get(createdUser._id);
-      expect(fetchedUser).toEqual(createdUser);
+        expect(createdUser).toMatchObject({
+          ...newUser,
+          _id: expect.any(String),
+          createdAt: expect.any(Number),
+          updatedAt: expect.any(Number)
+        });
 
-      // UPDATE
-      const updates = { name: "John Updated", age: 31 };
-      await collection.update(createdUser._id, updates, "client123");
+        // READ
+        const fetchedUser = await collection.get(createdUser._id);
+        expect(fetchedUser).toEqual(createdUser);
 
-      const updatedUser = await collection.get(createdUser._id);
-      expect(updatedUser.name).toBe("John Updated");
-      expect(updatedUser.age).toBe(31);
-      expect(updatedUser.updatedAt).toBeGreaterThan(createdUser.updatedAt);
+        // UPDATE
+        const updates = { name: "John Updated", age: 31 };
+        await collection.update(createdUser._id, updates, "client123");
 
-      // DELETE
-      await collection.delete(createdUser._id, "client123");
+        const updatedUser = await collection.get(createdUser._id);
+        expect(updatedUser.name).toBe("John Updated");
+        expect(updatedUser.age).toBe(31);
+        expect(updatedUser.updatedAt).toBeGreaterThan(createdUser.updatedAt);
 
-      // Verify deletion
-      await expect(collection.get(createdUser._id)).rejects.toThrow();
+        // DELETE
+        await collection.delete(createdUser._id, "client123");
+
+        // Verify deletion
+        await expect(collection.get(createdUser._id)).rejects.toThrow();
+      } finally {
+        nowSpy.mockRestore();
+      }
     });
 
     it("should handle batch operations", async () => {
