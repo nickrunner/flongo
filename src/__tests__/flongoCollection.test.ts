@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi, MockedFunction } from 'vitest';
 import { ObjectId } from 'mongodb';
 import { FlongoCollection, __resetServerVersionCache } from '../flongoCollection';
 import { FlongoQuery } from '../flongoQuery';
-import { EventName } from '../types';
+import { EventName, SortDirection } from '../types';
 import { Error404 } from '../errors';
 import { TestUser, sampleUsers, sampleUsersWithIds } from './testUtils';
 
@@ -223,6 +223,66 @@ describe('FlongoCollection', () => {
         mockCollection.find().toArray.mockRejectedValue(error);
 
         await expect(collection.getAll()).rejects.toThrow('Database error');
+      });
+    });
+
+    describe('getIds', () => {
+      it('should return string ids and project only _id', async () => {
+        const ids = ['507f1f77bcf86cd799439011', '507f1f77bcf86cd799439012'];
+        mockCollection.find().toArray.mockResolvedValue(ids.map((id) => ({ _id: new ObjectId(id) })));
+
+        const result = await collection.getIds();
+
+        expect(mockCollection.find).toHaveBeenCalledWith({}, { projection: { _id: 1 } });
+        expect(result).toEqual(ids);
+      });
+
+      it('should respect filters, sort, and pagination', async () => {
+        mockCollection.find().toArray.mockResolvedValue([]);
+        const query = new FlongoQuery()
+          .where('isActive')
+          .eq(true)
+          .orderBy('createdAt', SortDirection.Descending);
+
+        await collection.getIds(query, { offset: 10, count: 5 });
+
+        expect(mockCollection.find).toHaveBeenCalledWith(
+          { isActive: { $eq: true } },
+          { skip: 10, limit: 5, sort: { createdAt: -1 }, projection: { _id: 1 } }
+        );
+      });
+
+      it('should return [] when nothing matches', async () => {
+        mockCollection.find().toArray.mockResolvedValue([]);
+
+        await expect(collection.getIds(new FlongoQuery().where('age').gt(99))).resolves.toEqual([]);
+      });
+
+      it('should handle the semi-join shape (_id $in combined with field clauses)', async () => {
+        const ids = ['507f1f77bcf86cd799439011', '507f1f77bcf86cd799439012'];
+        mockCollection.find().toArray.mockResolvedValue([{ _id: new ObjectId(ids[0]) }]);
+
+        const result = await collection.getIds(
+          new FlongoQuery().where('_id').in(ids).and('isActive').eq(true)
+        );
+
+        const [filter, options] = mockCollection.find.mock.calls.at(-1);
+        expect(filter._id.$in.map((o: ObjectId) => o.toString())).toEqual(ids);
+        expect(filter.isActive).toEqual({ $eq: true });
+        expect(options.projection).toEqual({ _id: 1 });
+        expect(result).toEqual([ids[0]]);
+      });
+
+      it('should route random sorts through aggregate with an _id projection', async () => {
+        const id = '507f1f77bcf86cd799439011';
+        mockCollection.aggregate().toArray.mockResolvedValue([{ _id: new ObjectId(id) }]);
+
+        const result = await collection.getIds(new FlongoQuery().orderByRandom('seed'));
+
+        expect(mockCollection.find).not.toHaveBeenCalled();
+        const pipeline = mockCollection.aggregate.mock.calls.at(-1)[0];
+        expect(pipeline.at(-1)).toEqual({ $project: { _id: 1 } });
+        expect(result).toEqual([id]);
       });
     });
 

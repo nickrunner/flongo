@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { ObjectId } from "mongodb";
 import { FlongoQuery, FlongoQueryBuilder } from "../flongoQuery";
 import { SortDirection, Logic } from "../types";
 
@@ -325,6 +326,62 @@ describe("FlongoQuery", () => {
       expect(built._id.$in).toHaveLength(2);
       expect(built._id.$in[0].toString()).toBe(ids[0]);
       expect(built._id.$in[1].toString()).toBe(ids[1]);
+    });
+
+    it("should build byte-identical output for an _id-only query", () => {
+      const id = "507f1f77bcf86cd799439011";
+      const built = query.where("_id").eq(id).build();
+
+      // Exactly {_id: ObjectId(id)} — no extra keys, direct ObjectId value.
+      expect(Object.keys(built)).toEqual(["_id"]);
+      expect(built._id).toBeInstanceOf(ObjectId);
+      expect(built._id.toString()).toBe(id);
+    });
+
+    it("should compose a single _id clause with other field clauses", () => {
+      const id = "507f1f77bcf86cd799439011";
+      const built = query.where("_id").eq(id).and("status").eq("active").build();
+
+      expect(built._id).toBeInstanceOf(ObjectId);
+      expect(built._id.toString()).toBe(id);
+      expect(built.status).toEqual({ $eq: "active" });
+    });
+
+    it("should compose an _id $in clause with other field clauses (semi-join shape)", () => {
+      const ids = ["507f1f77bcf86cd799439011", "507f1f77bcf86cd799439012"];
+      const built = query
+        .where("_id")
+        .in(ids)
+        .and("status")
+        .eq("Accepted")
+        .and("enable")
+        .eq(true)
+        .build();
+
+      expect(built._id.$in.map((o: ObjectId) => o.toString())).toEqual(ids);
+      expect(built.status).toEqual({ $eq: "Accepted" });
+      expect(built.enable).toEqual({ $eq: true });
+    });
+
+    it("should keep clauses added before an _id clause", () => {
+      const ids = ["507f1f77bcf86cd799439011"];
+      const built = query.where("status").eq("active").and("_id").in(ids).build();
+
+      expect(built.status).toEqual({ $eq: "active" });
+      expect(built._id.$in[0].toString()).toBe(ids[0]);
+    });
+
+    it("should still support the andQuery sub-query pattern for _id (back-compat)", () => {
+      const ids = ["507f1f77bcf86cd799439011", "507f1f77bcf86cd799439012"];
+      const built = query
+        .where("status")
+        .eq("active")
+        .andQuery(new FlongoQuery().where("_id").in(ids))
+        .build();
+
+      expect(built.status).toEqual({ $eq: "active" });
+      expect(built.$and).toHaveLength(1);
+      expect(built.$and[0]._id.$in.map((o: ObjectId) => o.toString())).toEqual(ids);
     });
   });
 

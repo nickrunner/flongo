@@ -208,6 +208,52 @@ export class FlongoCollection<T> {
   }
 
   /**
+   * Retrieves only the `_id`s of matching documents, as strings (the same
+   * normalization `toEntity` applies). Uses a server-side projection so full
+   * documents never leave the server — ideal for semi-joins ("which of these N
+   * ids match this filter?") and other membership checks where hydrating whole
+   * documents is wasted work.
+   *
+   * Honors the same query and pagination semantics as `getAll`, including sort
+   * clauses (ordered ids are useful for id-first pagination).
+   *
+   * Example usage:
+   * ```typescript
+   * // Semi-join: of these candidate stayIds, which are publicly visible?
+   * const visibleIds = await stays.getIds(
+   *   new FlongoQuery()
+   *     .where('_id').in(candidateStayIds)
+   *     .and('status').eq('Accepted')
+   *     .and('enable').eq(true)
+   * );
+   * ```
+   *
+   * @param query - Optional FlongoQuery for filtering
+   * @param pagination - Optional pagination settings
+   * @returns Promise resolving to the matching document ids as strings
+   */
+  async getIds(query?: FlongoQuery, pagination?: Pagination): Promise<string[]> {
+    // Mirror getAll: a seeded random sort must execute via the aggregation
+    // pipeline. Only the id column is materialized on either path.
+    if (query?.hasRandomSort()) {
+      await this.assertRandomSortSupported();
+      const pipeline = query.buildPipeline<Entity & T>(pagination);
+      pipeline.push({ $project: { _id: 1 } });
+      const res = await this.collection.aggregate(pipeline).toArray();
+      return res.map((d) => String(d._id));
+    }
+
+    const mongodbQuery: Filter<Entity & T> = query?.build() ?? {};
+    const mongodbOptions: FindOptions<Entity & T> = {
+      ...(query?.buildOptions(pagination) ?? new FlongoQuery().buildOptions(pagination)),
+      projection: { _id: 1 }
+    };
+
+    const res = await this.collection.find(mongodbQuery, mongodbOptions).toArray();
+    return res.map((d) => String(d._id));
+  }
+
+  /**
    * Runs a raw aggregation pipeline against this collection and returns the
    * documents with their `_id` normalized to a string (Entity form). A low-level
    * escape hatch for computed-field sorts/rankings that the fluent builder does

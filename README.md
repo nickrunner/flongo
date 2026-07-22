@@ -168,6 +168,32 @@ const topRated = await products.aggregate([
 ]);
 ```
 
+#### Id projection & semi-joins (`getIds`)
+
+When you only need to know **which** documents match — not their contents —
+`getIds(query, pagination?)` returns matching `_id`s as strings. It uses a
+server-side projection, so full documents never leave the server. This is the
+natural fit for a semi-join: "of these N candidate ids, which pass this filter?"
+
+```typescript
+// Of these candidate stayIds, which are publicly visible?
+const visibleIds = await stays.getIds(
+  new FlongoQuery()
+    .where('_id').in(candidateStayIds)
+    .and('status').eq('Accepted')
+    .and('enable').eq(true)
+);
+```
+
+`getIds` honors the same query and pagination semantics as `getAll`, including
+sort clauses — ordered ids are useful for id-first pagination.
+
+> **Note (2.2.0):** inline `_id` clauses now compose with other field clauses,
+> as the example above relies on. Previously an `_id` clause caused every other
+> clause in the same clause list to be silently dropped, and filters had to be
+> attached via `.andQuery(new FlongoQuery().where('_id').in(ids))` — that
+> pattern still works unchanged.
+
 ### Collection Operations
 
 ```typescript
@@ -184,6 +210,7 @@ const user = await collection.create({
 // Read
 const user = await collection.get('user123');
 const users = await collection.getAll(query);
+const ids = await collection.getIds(query);   // matching _ids only (server-side projection)
 const first = await collection.getFirst(query);
 const count = await collection.count(query);
 const exists = await collection.exists(query);
@@ -501,6 +528,25 @@ const users = await collection.getAll(
     .orderBy('name')
 );
 ```
+
+## Changelog
+
+### 2.2.0
+
+- **`FlongoCollection.getIds(query?, pagination?)`** — returns matching `_id`s
+  as strings via a server-side projection (`{_id: 1}` on `find`, `$project` on
+  the aggregation path), so full documents never cross the wire. Honors the
+  same query, sort, and pagination semantics as `getAll`.
+- **Inline `_id` clauses now compose in `build()`.** Previously an `_id`
+  expression in the main clause list short-circuited the build and silently
+  discarded every other clause; combining `_id` with other filters required the
+  `.andQuery(new FlongoQuery().where('_id').in(ids))` workaround. Now `_id`
+  composes like any other field (string → ObjectId conversion is preserved for
+  both single values and `$in` arrays). Queries with **only** an `_id` clause
+  build identical output to before, and the `andQuery` pattern still works.
+  *Behavior note:* if a query combined `_id` with other clauses **and** relied
+  on those other clauses being ignored, it now returns only documents matching
+  all clauses — i.e., what the query literally says.
 
 ## License
 

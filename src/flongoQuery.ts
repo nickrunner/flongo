@@ -564,25 +564,22 @@ export class FlongoQuery implements ICollectionQuery {
       // Process main expressions
       if (this.expressions) {
         for (const expression of this.expressions) {
-          // Special handling for _id field - convert strings to ObjectIds
+          // Build query object for this clause
+          let fieldValue: any;
           if (expression.key === "_id") {
+            // _id keeps its string -> ObjectId conversion but composes with the
+            // other clauses like any field (it used to short-circuit the build,
+            // silently discarding every co-existing clause).
             if (Array.isArray(expression.val)) {
               // Multiple IDs: {_id: {$in: [ObjectId(...), ObjectId(...)]}}
-              mongodbQuery = {
-                _id: {
-                  [expression.op ?? "$in"]: expression.val.map((element) => new ObjectId(element))
-                }
+              fieldValue = {
+                [expression.op ?? "$in"]: expression.val.map((element) => new ObjectId(element))
               };
             } else {
               // Single ID: {_id: ObjectId(...)}
-              mongodbQuery = { _id: new ObjectId(expression.val) } as any;
+              fieldValue = new ObjectId(expression.val);
             }
-            break; // _id queries are typically exclusive
-          }
-
-          // Build query object for non-_id fields
-          let fieldValue: any;
-          if (!expression.op) {
+          } else if (!expression.op) {
             // Direct value assignment for simple equality (arrContains)
             fieldValue = expression.val;
           } else if (expression.op === "$regex") {
@@ -599,11 +596,15 @@ export class FlongoQuery implements ICollectionQuery {
             fieldValue = { [expression.op]: expression.val };
           }
 
-          // Merge operators for the same field (e.g., range queries)
+          // Merge operators for the same field (e.g., range queries).
+          // ObjectId instances are direct values, not operator maps — spreading
+          // one would destroy it, so they always assign.
           if (
             mongodbQuery[expression.key] &&
             typeof mongodbQuery[expression.key] === "object" &&
-            typeof fieldValue === "object"
+            !(mongodbQuery[expression.key] instanceof ObjectId) &&
+            typeof fieldValue === "object" &&
+            !(fieldValue instanceof ObjectId)
           ) {
             mongodbQuery[expression.key] = { ...mongodbQuery[expression.key], ...fieldValue };
           } else {

@@ -41,10 +41,12 @@ vi.mock("../flongo", () => {
               }
             }
 
-            // Apply sorting if specified
-            if (sortValue) {
+            // Apply sorting if specified (cursor.sort() or options.sort, which
+            // is how FlongoCollection passes buildOptions() output)
+            const effectiveSort = sortValue ?? options.sort;
+            if (effectiveSort) {
               results.sort((a, b) => {
-                for (const [field, direction] of Object.entries(sortValue)) {
+                for (const [field, direction] of Object.entries(effectiveSort)) {
                   const aVal = a[field];
                   const bVal = b[field];
                   if (aVal < bVal) return direction === 1 ? -1 : 1;
@@ -68,6 +70,22 @@ vi.mock("../flongo", () => {
             }
             if (options.limit !== undefined) {
               results = results.slice(0, options.limit);
+            }
+
+            // Apply inclusion projections so tests can verify that projected
+            // reads (e.g. getIds) never see full documents.
+            if (options.projection) {
+              const included = Object.entries(options.projection)
+                .filter(([, v]) => v === 1 || v === true)
+                .map(([k]) => k);
+              if (included.length) {
+                results = results.map((doc) => {
+                  const projected: any = {};
+                  if (options.projection._id !== 0) projected._id = doc._id;
+                  for (const key of included) projected[key] = doc[key];
+                  return projected;
+                });
+              }
             }
 
             return results;
@@ -226,7 +244,13 @@ vi.mock("../flongo", () => {
 
     for (const [field, condition] of Object.entries(query)) {
       if (field === "_id") {
-        if (doc._id !== condition?.toString()) return false;
+        // _id conditions arrive either as a direct ObjectId or as {$in: [ObjectId...]}
+        const inList = (condition as any)?.$in;
+        if (Array.isArray(inList)) {
+          if (!inList.some((id: any) => doc._id === id?.toString())) return false;
+        } else if (doc._id !== condition?.toString()) {
+          return false;
+        }
         continue;
       }
 
@@ -448,6 +472,58 @@ describe("Integration Tests", () => {
 
       const hasMinors = await collection.exists(new FlongoQuery().where("age").lt(18));
       expect(hasMinors).toBe(false);
+    });
+  });
+
+  describe("Id projection (getIds)", () => {
+    beforeEach(async () => {
+      await collection.batchCreate(sampleUsers);
+    });
+
+    it("performs the semi-join shape: _id $in combined with field clauses", async () => {
+      const all = await collection.getAll();
+      const john = all.find((u) => u.name === "John Doe")!;
+      const bob = all.find((u) => u.name === "Bob Johnson")!;
+
+      // Of these two candidates, only John is active — Bob must be filtered out
+      // by the composed field clause, and Jane must be excluded by the $in.
+      const matching = await collection.getIds(
+        new FlongoQuery().where("_id").in([john._id, bob._id]).and("isActive").eq(true)
+      );
+
+      expect(matching).toEqual([john._id]);
+    });
+
+    it("sends an _id projection to the driver so full documents are never fetched", async () => {
+      const mockCollection = mockDb.collection("users");
+      mockCollection.find.mockClear();
+
+      const ids = await collection.getIds(new FlongoQuery().where("isActive").eq(true));
+
+      const [, options] = mockCollection.find.mock.calls.at(-1);
+      expect(options.projection).toEqual({ _id: 1 });
+      // The mock applies the projection, so getIds resolved these from
+      // _id-only documents.
+      expect(ids).toHaveLength(2);
+      ids.forEach((id) => expect(typeof id).toBe("string"));
+    });
+
+    it("honors sort and pagination like getAll", async () => {
+      const byAgeDesc = await collection.getAll(
+        new FlongoQuery().orderBy("age", SortDirection.Descending)
+      );
+
+      const ids = await collection.getIds(
+        new FlongoQuery().orderBy("age", SortDirection.Descending),
+        { offset: 1, count: 1 }
+      );
+
+      expect(ids).toEqual([byAgeDesc[1]._id]);
+    });
+
+    it("returns [] when nothing matches", async () => {
+      const ids = await collection.getIds(new FlongoQuery().where("age").gt(999));
+      expect(ids).toEqual([]);
     });
   });
 
