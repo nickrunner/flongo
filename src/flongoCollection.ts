@@ -176,10 +176,11 @@ export class FlongoCollection<T> {
    * @returns Promise resolving to array of documents
    */
   async getAll(query?: FlongoQuery, pagination?: Pagination): Promise<(Entity & T)[]> {
-    // A seeded random sort can't be expressed with find().sort() — it sorts by a
-    // computed per-document value, so it routes through an aggregation pipeline.
-    if (query?.hasRandomSort()) {
-      return this.getAllRandom(query, pagination);
+    // Seeded random and expression sorts can't be expressed with find().sort() —
+    // they sort by computed per-document values, so they route through an
+    // aggregation pipeline.
+    if (query?.needsPipeline()) {
+      return this.getAllViaPipeline(query, pagination);
     }
 
     const mongodbQuery: Filter<Entity & T> = query?.build() ?? {};
@@ -195,13 +196,19 @@ export class FlongoCollection<T> {
   }
 
   /**
-   * Executes a query carrying an `orderByRandom` via an aggregation pipeline.
-   * Verifies the server supports `$toHashedIndexKey` (MongoDB >= 8.0) first so
-   * callers get an actionable error rather than a raw driver failure.
+   * Executes a query carrying computed sort keys (`orderByRandom` and/or
+   * `orderByExpr`) via an aggregation pipeline. For random sorts, verifies the
+   * server supports `$toHashedIndexKey` (MongoDB >= 8.0) first so callers get an
+   * actionable error rather than a raw driver failure.
    * @private
    */
-  private async getAllRandom(query: FlongoQuery, pagination?: Pagination): Promise<(Entity & T)[]> {
-    await this.assertRandomSortSupported();
+  private async getAllViaPipeline(
+    query: FlongoQuery,
+    pagination?: Pagination
+  ): Promise<(Entity & T)[]> {
+    if (query.hasRandomSort()) {
+      await this.assertRandomSortSupported();
+    }
     const pipeline = query.buildPipeline<Entity & T>(pagination);
     const res = await this.collection.aggregate(pipeline).toArray();
     return res.map((d) => this.toEntity(d));
@@ -233,10 +240,12 @@ export class FlongoCollection<T> {
    * @returns Promise resolving to the matching document ids as strings
    */
   async getIds(query?: FlongoQuery, pagination?: Pagination): Promise<string[]> {
-    // Mirror getAll: a seeded random sort must execute via the aggregation
+    // Mirror getAll: computed sort keys must execute via the aggregation
     // pipeline. Only the id column is materialized on either path.
-    if (query?.hasRandomSort()) {
-      await this.assertRandomSortSupported();
+    if (query?.needsPipeline()) {
+      if (query.hasRandomSort()) {
+        await this.assertRandomSortSupported();
+      }
       const pipeline = query.buildPipeline<Entity & T>(pagination);
       pipeline.push({ $project: { _id: 1 } });
       const res = await this.collection.aggregate(pipeline).toArray();
@@ -298,9 +307,9 @@ export class FlongoCollection<T> {
    * @returns Promise resolving to array of documents
    */
   async getSome(query: FlongoQuery, pagination: Pagination): Promise<(Entity & T)[]> {
-    // Mirror getAll: a seeded random sort routes through the aggregation path.
-    if (query?.hasRandomSort()) {
-      return this.getAllRandom(query, pagination);
+    // Mirror getAll: computed sort keys route through the aggregation path.
+    if (query?.needsPipeline()) {
+      return this.getAllViaPipeline(query, pagination);
     }
 
     const mongodbQuery: Filter<Entity & T> = query?.build();

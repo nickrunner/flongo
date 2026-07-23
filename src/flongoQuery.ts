@@ -59,6 +59,9 @@ export class FlongoQuery implements ICollectionQuery {
   /** Internal computed field used to carry the per-document shuffle hash. */
   public static readonly SHUFFLE_FIELD = "__flongoShuffle";
 
+  /** Prefix of internal computed fields backing expression sort keys. */
+  public static readonly EXPR_FIELD_PREFIX = "__flongoSortExpr";
+
   /**
    * Primary sort field, derived from `sorts[0]`.
    * @deprecated Retained for backward compatibility; use `sorts`.
@@ -480,6 +483,60 @@ export class FlongoQuery implements ICollectionQuery {
   }
 
   /**
+   * Sets the primary sort to a computed aggregation expression, resetting any
+   * previously configured sort keys (the expression analog of `orderBy`).
+   *
+   * The expression is materialized into an internal field via `$addFields`, so a
+   * query carrying an expression sort executes via an aggregation pipeline
+   * instead of `find` (same execution path as `orderByRandom`, but with no
+   * server-version requirement). The internal field never leaks to callers.
+   *
+   * The canonical use is normalizing a field before sorting on it. MongoDB's
+   * BSON type order ranks Boolean above Null/missing, so
+   * `orderBy('featured', Descending)` puts an explicit `featured: false` *above*
+   * documents missing the field entirely. Normalizing fixes that:
+   *
+   * @example
+   * // Pin featured docs on top; explicit false and missing tie.
+   * new FlongoQuery()
+   *   .orderByExpr({ $eq: ['$featured', true] }, SortDirection.Descending)
+   *   .thenBy('_id', SortDirection.Ascending);
+   *
+   * Composes with `thenBy`/`orderByRandom` exactly like a field sort key: keys
+   * apply in call order.
+   *
+   * @param expr - MongoDB aggregation expression to sort by
+   * @param direction - Sort direction (ascending or descending)
+   * @returns This query instance for chaining
+   */
+  public orderByExpr(expr: Document, direction: SortDirection): FlongoQuery {
+    this.sorts = [];
+    return this.thenByExpr(expr, direction);
+  }
+
+  /**
+   * Appends a computed aggregation expression as a tiebreaker sort key (the
+   * expression analog of `thenBy`). See `orderByExpr` for semantics.
+   *
+   * @param expr - MongoDB aggregation expression to sort by
+   * @param direction - Sort direction (ascending or descending)
+   * @returns This query instance for chaining
+   */
+  public thenByExpr(expr: Document, direction: SortDirection): FlongoQuery {
+    const index = this.sorts.filter((s) => s.expr !== undefined).length;
+    this.sorts.push({ field: `${FlongoQuery.EXPR_FIELD_PREFIX}${index}`, direction, expr });
+    return this;
+  }
+
+  /**
+   * Whether this query carries any expression sort keys (`orderByExpr`/
+   * `thenByExpr`) and must therefore execute via an aggregation pipeline.
+   */
+  public hasExprSort(): boolean {
+    return this.sorts.some((s) => s.expr !== undefined);
+  }
+
+  /**
    * Adds a deterministic, seeded random sort. Given the same seed the produced
    * order is identical on every call, so `$skip`/`$limit` pagination stays
    * gapless and non-overlapping across pages; change the seed and the whole set
@@ -522,6 +579,15 @@ export class FlongoQuery implements ICollectionQuery {
    */
   public hasRandomSort(): boolean {
     return this.randomSeed !== undefined;
+  }
+
+  /**
+   * Whether this query must execute via an aggregation pipeline
+   * (`buildPipeline`) rather than the normal `find` path — true when it carries
+   * a random sort and/or any expression sort keys.
+   */
+  public needsPipeline(): boolean {
+    return this.hasRandomSort() || this.hasExprSort();
   }
 
   // ===========================================
@@ -663,8 +729,10 @@ export class FlongoQuery implements ICollectionQuery {
     // Add sorting if specified. Iterate sort keys in order so MongoDB honors the
     // insertion order of the resulting `sort` object's keys (primary first, then
     // tiebreakers). Entries without a direction are skipped, preserving the prior
-    // behavior where a field set with no direction produced no sort.
-    const sortKeys = this.sorts.filter((s) => s.field && s.direction);
+    // behavior where a field set with no direction produced no sort. Expression
+    // keys are computed fields that only exist on the pipeline path, so they are
+    // excluded here rather than sorting on a field no document has.
+    const sortKeys = this.sorts.filter((s) => s.field && s.direction && s.expr === undefined);
     if (sortKeys.length) {
       const sort: Record<string, 1 | -1> = {};
       for (const s of sortKeys) {
@@ -679,8 +747,8 @@ export class FlongoQuery implements ICollectionQuery {
   /**
    * Builds the ordered `$sort` specification for the aggregation path, weaving
    * the internal shuffle field in at its call position amongst the explicit
-   * sort keys and always appending `_id` as a final tiebreaker. Only used when
-   * a random sort is present.
+   * sort keys (expression keys sort by their computed internal field) and always
+   * appending `_id` as a final tiebreaker. Only used on the pipeline path.
    * @private
    */
   private buildAggregationSort(): Record<string, 1 | -1> {
@@ -715,13 +783,15 @@ export class FlongoQuery implements ICollectionQuery {
 
   /**
    * Compiles this query into an aggregation pipeline that materializes the same
-   * results as `find` would, but ordered by a deterministic per-document shuffle
-   * (see `orderByRandom`). The `$match` stage is exactly what `find` receives
-   * today (`build()`), so all filter logic and indexes carry over unchanged;
-   * `$skip`/`$limit` are applied *after* the deterministic sort, which is what
-   * makes paging stable.
+   * results as `find` would, but ordered by computed sort values — the
+   * deterministic per-document shuffle (`orderByRandom`) and/or expression sort
+   * keys (`orderByExpr`/`thenByExpr`). The `$match` stage is exactly what `find`
+   * receives today (`build()`), so all filter logic and indexes carry over
+   * unchanged; `$skip`/`$limit` are applied *after* the deterministic sort,
+   * which is what makes paging stable.
    *
-   * **Requires MongoDB server >= 8.0** (uses `$toHashedIndexKey`).
+   * **A random sort requires MongoDB server >= 8.0** (uses `$toHashedIndexKey`);
+   * expression sorts have no version requirement.
    *
    * @param pagination - Optional pagination settings
    * @returns MongoDB aggregation pipeline stages
@@ -729,16 +799,24 @@ export class FlongoQuery implements ICollectionQuery {
   public buildPipeline<T>(pagination?: Pagination): Document[] {
     const pipeline: Document[] = [{ $match: this.build<T>() }];
 
-    // Hash the full `_id` string mixed with the seed. Hashing the whole _id
-    // decorrelates the order from the ObjectId timestamp prefix, so newer docs
-    // aren't biased toward one end of the shuffle.
-    pipeline.push({
-      $addFields: {
-        [FlongoQuery.SHUFFLE_FIELD]: {
-          $toHashedIndexKey: { $concat: [{ $toString: "$_id" }, ":", this.randomSeed] }
-        }
+    // Materialize every computed sort value in one $addFields stage.
+    const computed: Document = {};
+    for (const s of this.sorts) {
+      if (s.expr !== undefined) {
+        computed[s.field] = s.expr;
       }
-    });
+    }
+    if (this.randomSeed !== undefined) {
+      // Hash the full `_id` string mixed with the seed. Hashing the whole _id
+      // decorrelates the order from the ObjectId timestamp prefix, so newer docs
+      // aren't biased toward one end of the shuffle.
+      computed[FlongoQuery.SHUFFLE_FIELD] = {
+        $toHashedIndexKey: { $concat: [{ $toString: "$_id" }, ":", this.randomSeed] }
+      };
+    }
+    if (Object.keys(computed).length > 0) {
+      pipeline.push({ $addFields: computed });
+    }
 
     pipeline.push({ $sort: this.buildAggregationSort() });
 
@@ -747,8 +825,14 @@ export class FlongoQuery implements ICollectionQuery {
       pipeline.push({ $limit: pagination.count });
     }
 
-    // Don't leak the internal shuffle field to callers.
-    pipeline.push({ $project: { [FlongoQuery.SHUFFLE_FIELD]: 0 } });
+    // Don't leak the internal computed fields to callers.
+    if (Object.keys(computed).length > 0) {
+      const exclusions: Document = {};
+      for (const field of Object.keys(computed)) {
+        exclusions[field] = 0;
+      }
+      pipeline.push({ $project: exclusions });
+    }
 
     return pipeline;
   }

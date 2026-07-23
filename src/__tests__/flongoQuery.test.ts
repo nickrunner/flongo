@@ -651,6 +651,107 @@ describe("FlongoQuery", () => {
     });
   });
 
+  describe("Expression sort (orderByExpr / thenByExpr)", () => {
+    const EXPR0 = `${FlongoQuery.EXPR_FIELD_PREFIX}0`;
+    const EXPR1 = `${FlongoQuery.EXPR_FIELD_PREFIX}1`;
+    const SHUFFLE = FlongoQuery.SHUFFLE_FIELD;
+    const FEATURED_EXPR = { $eq: ["$featured", true] };
+
+    // Extract the single-key operator stage of the given type from a pipeline.
+    const stage = (pipeline: any[], key: string) => pipeline.find((s) => key in s)?.[key];
+
+    it("should not carry an expression sort by default", () => {
+      expect(query.hasExprSort()).toBe(false);
+      expect(query.needsPipeline()).toBe(false);
+    });
+
+    it("should flag pipeline execution once orderByExpr is called", () => {
+      query.orderByExpr(FEATURED_EXPR, SortDirection.Descending);
+      expect(query.hasExprSort()).toBe(true);
+      expect(query.hasRandomSort()).toBe(false);
+      expect(query.needsPipeline()).toBe(true);
+    });
+
+    it("should materialize the expression via $addFields and sort on it", () => {
+      const pipeline = query
+        .where("enable")
+        .eq(true)
+        .orderByExpr(FEATURED_EXPR, SortDirection.Descending)
+        .buildPipeline();
+
+      expect(stage(pipeline, "$match")).toEqual({ enable: { $eq: true } });
+      expect(stage(pipeline, "$addFields")).toEqual({ [EXPR0]: FEATURED_EXPR });
+      expect(stage(pipeline, "$sort")).toEqual({ [EXPR0]: -1, _id: 1 });
+      // Internal computed field is projected out.
+      expect(stage(pipeline, "$project")).toEqual({ [EXPR0]: 0 });
+    });
+
+    it("should compose with thenBy field keys in call order", () => {
+      const pipeline = query
+        .orderByExpr(FEATURED_EXPR, SortDirection.Descending)
+        .thenBy("name", SortDirection.Ascending)
+        .buildPipeline();
+
+      expect(Object.keys(stage(pipeline, "$sort"))).toEqual([EXPR0, "name", "_id"]);
+    });
+
+    it("should compose with orderByRandom: expr pins tiers, shuffle within", () => {
+      const pipeline = query
+        .orderByExpr(FEATURED_EXPR, SortDirection.Descending)
+        .orderByRandom(7)
+        .buildPipeline();
+
+      expect(stage(pipeline, "$addFields")).toMatchObject({ [EXPR0]: FEATURED_EXPR });
+      expect(stage(pipeline, "$addFields")[SHUFFLE]).toBeDefined();
+      expect(Object.keys(stage(pipeline, "$sort"))).toEqual([EXPR0, SHUFFLE, "_id"]);
+      // Both computed fields are projected out.
+      expect(stage(pipeline, "$project")).toEqual({ [EXPR0]: 0, [SHUFFLE]: 0 });
+    });
+
+    it("should support multiple expression keys with distinct internal fields", () => {
+      const secondExpr = { $ifNull: ["$rank", 0] };
+      const pipeline = query
+        .orderByExpr(FEATURED_EXPR, SortDirection.Descending)
+        .thenByExpr(secondExpr, SortDirection.Ascending)
+        .buildPipeline();
+
+      expect(stage(pipeline, "$addFields")).toEqual({
+        [EXPR0]: FEATURED_EXPR,
+        [EXPR1]: secondExpr
+      });
+      expect(Object.keys(stage(pipeline, "$sort"))).toEqual([EXPR0, EXPR1, "_id"]);
+    });
+
+    it("should reset previous sort keys on orderByExpr (parity with orderBy)", () => {
+      const pipeline = query
+        .orderBy("createdAt", SortDirection.Descending)
+        .orderByExpr(FEATURED_EXPR, SortDirection.Ascending)
+        .buildPipeline();
+
+      expect(Object.keys(stage(pipeline, "$sort"))).toEqual([EXPR0, "_id"]);
+    });
+
+    it("should exclude expression keys from find-path sort options", () => {
+      query
+        .orderByExpr(FEATURED_EXPR, SortDirection.Descending)
+        .thenBy("name", SortDirection.Ascending);
+
+      // The computed field doesn't exist on the find path; only real fields sort.
+      expect(query.buildOptions().sort).toEqual({ name: 1 });
+    });
+
+    it("should append skip/limit after the sort when paginated", () => {
+      const pipeline = query
+        .orderByExpr(FEATURED_EXPR, SortDirection.Descending)
+        .buildPipeline({ offset: 10, count: 5 });
+
+      const idx = (k: string) => pipeline.findIndex((s) => k in s);
+      expect(stage(pipeline, "$skip")).toBe(10);
+      expect(stage(pipeline, "$limit")).toBe(5);
+      expect(idx("$sort")).toBeLessThan(idx("$skip"));
+    });
+  });
+
   describe("Pagination", () => {
     it("should build pagination options", () => {
       const pagination = { offset: 10, count: 20 };

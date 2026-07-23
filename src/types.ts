@@ -87,6 +87,12 @@ export class ColExpression {
 export interface Sort {
   field: string;
   direction?: SortDirection;
+  /**
+   * Aggregation expression this sort key is computed from (set by
+   * `orderByExpr`/`thenByExpr`). When present, `field` is an internal
+   * generated name materialized via `$addFields` on the pipeline path.
+   */
+  expr?: unknown;
 }
 
 // Interfaces for query and collection operations

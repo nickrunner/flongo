@@ -357,6 +357,74 @@ describe('FlongoCollection', () => {
         // Version guard should short-circuit before touching aggregate.
         expect(mockCollection.aggregate).not.toHaveBeenCalled();
       });
+    });
+
+    describe('getAll with orderByExpr (aggregation path)', () => {
+      const FEATURED_EXPR = { $eq: ['$featured', true] };
+
+      it('should execute via aggregate, not find, when an expression sort is present', async () => {
+        const mockUsers = sampleUsersWithIds;
+        mockCollection.aggregate().toArray.mockResolvedValue(mockUsers);
+        mockCollection.aggregate.mockClear();
+
+        const query = new FlongoQuery()
+          .where('enable')
+          .eq(true)
+          .orderByExpr(FEATURED_EXPR, SortDirection.Descending);
+        const result = await collection.getAll(query, { offset: 0, count: 2 });
+
+        expect(mockCollection.find).not.toHaveBeenCalled();
+        expect(mockCollection.aggregate).toHaveBeenCalledTimes(1);
+        const pipeline = mockCollection.aggregate.mock.calls[0][0];
+        expect(pipeline).toEqual(query.buildPipeline({ offset: 0, count: 2 }));
+        expect(result).toEqual(mockUsers);
+      });
+
+      it('should not require the MongoDB 8.0 version check without a random sort', async () => {
+        // Expression sorts use plain $addFields — valid on old servers too.
+        mockDb.command.mockResolvedValue({ version: '7.0.5', versionArray: [7, 0, 5, 0] });
+        mockCollection.aggregate().toArray.mockResolvedValue([]);
+
+        const query = new FlongoQuery().orderByExpr(FEATURED_EXPR, SortDirection.Descending);
+        await expect(collection.getAll(query)).resolves.toEqual([]);
+        expect(mockDb.command).not.toHaveBeenCalled();
+      });
+
+      it('should still enforce the version check when combined with orderByRandom', async () => {
+        mockDb.command.mockResolvedValue({ version: '7.0.5', versionArray: [7, 0, 5, 0] });
+
+        const query = new FlongoQuery()
+          .orderByExpr(FEATURED_EXPR, SortDirection.Descending)
+          .orderByRandom(1);
+
+        await expect(collection.getAll(query)).rejects.toThrow(/8\.0/);
+      });
+
+      it('should route getIds expression sorts through aggregate with an _id projection', async () => {
+        const id = '507f1f77bcf86cd799439011';
+        mockCollection.aggregate().toArray.mockResolvedValue([{ _id: new ObjectId(id) }]);
+        mockCollection.aggregate.mockClear();
+
+        const result = await collection.getIds(
+          new FlongoQuery().orderByExpr(FEATURED_EXPR, SortDirection.Descending)
+        );
+
+        expect(mockCollection.find).not.toHaveBeenCalled();
+        const pipeline = mockCollection.aggregate.mock.calls.at(-1)[0];
+        expect(pipeline.at(-1)).toEqual({ $project: { _id: 1 } });
+        expect(result).toEqual([id]);
+      });
+
+      it('should route getSome expression sorts through aggregate', async () => {
+        mockCollection.aggregate().toArray.mockResolvedValue([]);
+        mockCollection.aggregate.mockClear();
+
+        const query = new FlongoQuery().orderByExpr(FEATURED_EXPR, SortDirection.Descending);
+        await collection.getSome(query, { offset: 0, count: 5 });
+
+        expect(mockCollection.find).not.toHaveBeenCalled();
+        expect(mockCollection.aggregate).toHaveBeenCalledTimes(1);
+      });
 
       it('should throw a wrapped error if the version check itself fails', async () => {
         mockDb.command.mockRejectedValue(new Error('not authorized'));
