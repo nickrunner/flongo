@@ -393,9 +393,11 @@ export class FlongoCollection<T> {
    * @param clientId - ID of the client performing the deletion
    */
   async batchDelete(ids: string[], clientId: string): Promise<void> {
-    // Note: There's a bug in the original code - mongodbQuery is incorrectly structured
-    // It should use ObjectIds, but we'll preserve the original logic for now
-    const mongodbQuery: Filter<Entity & T> = { _id: { $in: ids } } as any;
+    if (ids.length === 0) return;
+
+    // Route the filter through FlongoQuery so the string ids get the same
+    // ObjectId conversion every other _id lookup in the library uses.
+    const mongodbQuery: Filter<Entity & T> = new FlongoQuery().where("_id").in(ids).build();
 
     // Get entities before deletion for backup logging
     const entities = await this.getAll(new FlongoQuery().where("_id").in(ids));
@@ -412,8 +414,7 @@ export class FlongoCollection<T> {
     });
 
     // Perform the actual deletion
-    // Note: This should be corrected to use proper MongoDB query structure
-    await this.collection.deleteMany({ mongodbQuery });
+    await this.collection.deleteMany(mongodbQuery);
   }
 
   // ===========================================

@@ -1088,6 +1088,17 @@ describe('FlongoCollection', () => {
 
         await collection.batchDelete(ids, 'client123');
 
+        // The filter must be the bare _id/$in clause with ObjectIds, not a
+        // wrapper object and not raw strings — either matches zero documents.
+        expect(mockCollection.deleteMany).toHaveBeenCalledTimes(1);
+        const [filter] = mockCollection.deleteMany.mock.calls[0];
+        expect(Object.keys(filter)).toEqual(['_id']);
+        expect(filter._id.$in).toHaveLength(2);
+        filter._id.$in.forEach((oid: any, i: number) => {
+          expect(oid).toBeInstanceOf(ObjectId);
+          expect(oid.toString()).toBe(ids[i]);
+        });
+
         expect(mockEventsCollection.insertOne).toHaveBeenCalledWith({
           name: EventName.BatchDeleteEntities,
           value: expect.objectContaining({
@@ -1098,6 +1109,13 @@ describe('FlongoCollection', () => {
           createdAt: expect.any(Number),
           updatedAt: expect.any(Number)
         });
+      });
+
+      it('should skip the database call and event when given no ids', async () => {
+        await collection.batchDelete([], 'client123');
+
+        expect(mockCollection.deleteMany).not.toHaveBeenCalled();
+        expect(mockEventsCollection.insertOne).not.toHaveBeenCalled();
       });
     });
   });

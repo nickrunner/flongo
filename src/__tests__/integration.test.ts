@@ -300,6 +300,10 @@ vi.mock("../flongo", () => {
               if (!docValue.some((item) => typeof item === "object" && item !== null)) return false;
               break;
             default:
+              // A key that isn't a Mongo operator is a nested-document match
+              // (e.g. a filter wrapped under a stray key). Real Mongo would
+              // compare it against the document field, which is absent here.
+              if (!op.startsWith("$")) return false;
               // For other operators, just assume match for simplicity
               break;
           }
