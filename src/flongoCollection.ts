@@ -671,7 +671,7 @@ export class FlongoCollection<T> {
    * @param attributes - Fields to update
    * @param query - Optional FlongoQuery to filter documents
    * @param clientId - Optional client ID for audit trail
-   * @returns Promise resolving to the updated document
+   * @returns Promise resolving to the document as it is after the update
    */
   async updateFirst(attributes: any, query?: FlongoQuery, clientId?: string): Promise<Entity & T> {
     const mongodbQuery: Filter<Entity & T> = query?.build() ?? {};
@@ -684,7 +684,11 @@ export class FlongoCollection<T> {
       }
     };
 
-    const updated = await this.collection.findOneAndUpdate(mongodbQuery, update);
+    // The driver defaults to returning the pre-update document; callers of
+    // updateFirst expect the document as it is after the write.
+    const updated = await this.collection.findOneAndUpdate(mongodbQuery, update, {
+      returnDocument: "after"
+    });
 
     if (updated) {
       return this.toEntity(updated);

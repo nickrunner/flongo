@@ -1017,9 +1017,22 @@ describe('FlongoCollection', () => {
               updatedBy: 'client123',
               ...updates
             }
-          }
+          },
+          { returnDocument: 'after' }
         );
         expect(result).toEqual(updatedUser);
+      });
+
+      it('should ask the driver for the post-update document, not the pre-update one', async () => {
+        // The driver's default is returnDocument: 'before', which would echo
+        // stale data back to callers even though the write landed.
+        mockCollection.findOneAndUpdate.mockResolvedValue({ ...sampleUsersWithIds[0], name: 'After' });
+
+        const result = await collection.updateFirst({ name: 'After' }, new FlongoQuery().where('isActive').eq(true));
+
+        const options = mockCollection.findOneAndUpdate.mock.calls[0][2];
+        expect(options).toEqual({ returnDocument: 'after' });
+        expect(result.name).toBe('After');
       });
 
       it('should throw error when no document updated', async () => {

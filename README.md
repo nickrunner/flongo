@@ -556,6 +556,15 @@ const users = await collection.getAll(
 
 ## Changelog
 
+### 2.4.1
+
+- **Fix: `updateFirst` returned the pre-update document.** It called
+  `findOneAndUpdate` without `returnDocument`, and the driver defaults to
+  returning the document as it was *before* the write. The write always
+  landed; only the echoed document was stale. It now passes
+  `returnDocument: "after"`, matching `upsertById`, `createOrUpdate`, and
+  `createIfNotExists`.
+
 ### 2.4.0
 
 - **`FlongoCollection.upsertById(id, attributes, clientId?)`** — atomic
