@@ -820,6 +820,143 @@ describe('FlongoCollection', () => {
       });
     });
 
+    describe('upsertById', () => {
+      const id = '507f1f77bcf86cd799439010';
+      const upsertOptions = { upsert: true, returnDocument: 'after', includeResultMetadata: true };
+
+      const insertedResult = (doc: any) => ({
+        value: { _id: new ObjectId(id), ...doc },
+        lastErrorObject: { n: 1, updatedExisting: false, upserted: new ObjectId(id) },
+        ok: 1
+      });
+      const updatedResult = (doc: any) => ({
+        value: { _id: new ObjectId(id), ...doc },
+        lastErrorObject: { n: 1, updatedExisting: true },
+        ok: 1
+      });
+
+      it('should insert when no document has the id, stamping create + update metadata', async () => {
+        const attrs = { name: 'John Doe', email: 'john@example.com' };
+        mockCollection.findOneAndUpdate.mockResolvedValue(
+          insertedResult({ ...attrs, createdAt: 1000, createdBy: 'client123', updatedAt: 1000, updatedBy: 'client123' })
+        );
+        mockCollection.countDocuments.mockResolvedValue(1);
+
+        const result = await collection.upsertById(id, attrs, 'client123');
+
+        expect(mockCollection.findOneAndUpdate).toHaveBeenCalledWith(
+          { _id: new ObjectId(id) },
+          {
+            $set: { name: 'John Doe', email: 'john@example.com', updatedAt: expect.any(Number), updatedBy: 'client123' },
+            $setOnInsert: { createdAt: expect.any(Number), createdBy: 'client123' }
+          },
+          upsertOptions
+        );
+        // The filter must carry a real ObjectId, not the raw string.
+        const filter = mockCollection.findOneAndUpdate.mock.calls[0][0];
+        expect(filter._id).toBeInstanceOf(ObjectId);
+        expect(String(filter._id)).toBe(id);
+
+        expect(result._id).toBe(id);
+        expect(typeof result._id).toBe('string');
+        expect(result.name).toBe('John Doe');
+        expect(result.createdAt).toBe(1000);
+      });
+
+      it('should log a CreateEntity event on the insert path', async () => {
+        mockCollection.findOneAndUpdate.mockResolvedValue(insertedResult({ name: 'New' }));
+        mockCollection.countDocuments.mockResolvedValue(7);
+
+        await collection.upsertById(id, { name: 'New' }, 'client123');
+
+        expect(mockEventsCollection.insertOne).toHaveBeenCalledTimes(1);
+        expect(mockEventsCollection.insertOne).toHaveBeenCalledWith({
+          name: EventName.CreateEntity,
+          identity: 'client123',
+          value: { id, collectionType: 'users', count: 7 },
+          createdAt: expect.any(Number),
+          updatedAt: expect.any(Number)
+        });
+      });
+
+      it('should update the existing document and log an UpdateEntity event', async () => {
+        mockCollection.findOneAndUpdate.mockResolvedValue(
+          updatedResult({ name: 'Updated', email: 'old@example.com', createdAt: 1000, updatedAt: 2000, updatedBy: 'client123' })
+        );
+
+        const result = await collection.upsertById(id, { name: 'Updated' }, 'client123');
+
+        expect(result._id).toBe(id);
+        expect(result.name).toBe('Updated');
+        expect(result.email).toBe('old@example.com'); // partial update: untouched fields survive
+        expect(result.createdAt).toBe(1000);
+        expect(result.updatedAt).toBe(2000);
+
+        expect(mockEventsCollection.insertOne).toHaveBeenCalledTimes(1);
+        expect(mockEventsCollection.insertOne).toHaveBeenCalledWith({
+          name: EventName.UpdateEntity,
+          identity: 'client123',
+          value: { collectionType: 'users', id },
+          createdAt: expect.any(Number),
+          updatedAt: expect.any(Number)
+        });
+        // No count() round-trip on the update path.
+        expect(mockCollection.countDocuments).not.toHaveBeenCalled();
+      });
+
+      it('should ignore _id and Entity bookkeeping fields inside attributes', async () => {
+        mockCollection.findOneAndUpdate.mockResolvedValue(updatedResult({ name: 'Test' }));
+
+        await collection.upsertById(
+          id,
+          { _id: 'other-id', name: 'Test', createdAt: 1, createdBy: 'x', updatedAt: 2, updatedBy: 'y' } as any,
+          'client123'
+        );
+
+        const [filter, update] = mockCollection.findOneAndUpdate.mock.calls[0];
+        expect(String(filter._id)).toBe(id);
+        expect(update.$set).toEqual({ name: 'Test', updatedAt: expect.any(Number), updatedBy: 'client123' });
+        expect(update.$set.updatedAt).not.toBe(2);
+        expect(update.$setOnInsert).toEqual({ createdAt: expect.any(Number), createdBy: 'client123' });
+        expect(update.$setOnInsert.createdAt).not.toBe(1);
+      });
+
+      it('should work without clientId', async () => {
+        mockCollection.findOneAndUpdate.mockResolvedValue(insertedResult({ name: 'Test' }));
+
+        const result = await collection.upsertById(id, { name: 'Test' });
+
+        expect(mockCollection.findOneAndUpdate).toHaveBeenCalledWith(
+          { _id: new ObjectId(id) },
+          {
+            $set: { name: 'Test', updatedAt: expect.any(Number), updatedBy: undefined },
+            $setOnInsert: { createdAt: expect.any(Number), createdBy: undefined }
+          },
+          upsertOptions
+        );
+        expect(result._id).toBe(id);
+        expect(mockEventsCollection.insertOne).toHaveBeenCalledWith(
+          expect.objectContaining({ name: EventName.CreateEntity, identity: undefined })
+        );
+      });
+
+      it('should not log events when audit logging is disabled', async () => {
+        const quiet = new FlongoCollection<TestUser>('users');
+        mockCollection.findOneAndUpdate.mockResolvedValue(insertedResult({ name: 'Test' }));
+
+        await quiet.upsertById(id, { name: 'Test' }, 'client123');
+
+        expect(mockEventsCollection.insertOne).not.toHaveBeenCalled();
+      });
+
+      it('should propagate database errors', async () => {
+        mockCollection.findOneAndUpdate.mockRejectedValue(new Error('Upsert failed'));
+
+        await expect(collection.upsertById(id, { name: 'x' })).rejects.toThrow('Upsert failed');
+        expect(mockEventsCollection.insertOne).not.toHaveBeenCalled();
+      });
+    });
+
     describe('updateAll', () => {
       it('should update all documents matching query', async () => {
         const updates = { isActive: false };

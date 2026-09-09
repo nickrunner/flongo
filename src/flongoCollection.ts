@@ -598,6 +598,75 @@ export class FlongoCollection<T> {
   }
 
   /**
+   * Upserts a single document by ID: applies `attributes` as a partial update
+   * if a document with that `_id` exists, otherwise inserts a new document
+   * carrying `attributes` under that `_id`. A single atomic
+   * `findOneAndUpdate({ upsert: true })`, so it is race-safe (last writer wins)
+   * and never throws `Error404` — the "does it exist yet?" check is done by the
+   * server.
+   *
+   * This is the id-keyed counterpart of `update()`: the id is converted to an
+   * ObjectId (so documents it creates are found by `get`, `update`, `delete`,
+   * and `_id` queries), `_id`/timestamp fields inside `attributes` are ignored,
+   * `updatedAt`/`updatedBy` are stamped on every call, and `createdAt`/`createdBy`
+   * are stamped only on insert. Unlike `update()`, it returns the resulting
+   * document, and it logs a `CreateEntity` or `UpdateEntity` audit event
+   * according to what actually happened.
+   *
+   * For string/custom `_id`s (e.g. cache keys) see `createOrUpdate()`.
+   *
+   * Example usage:
+   * ```typescript
+   * // Idempotent sync: the first call creates, every later call updates.
+   * const settings = await userSettings.upsertById(userId, { theme: 'dark' }, userId);
+   * ```
+   *
+   * @param id - Document ID (string, converted to ObjectId)
+   * @param attributes - Fields to set on the document (partial update on the update path)
+   * @param clientId - Optional client ID for audit trail
+   * @returns Promise resolving to the document after the upsert (Entity form)
+   */
+  async upsertById(id: string, attributes: Partial<T>, clientId?: string): Promise<Entity & T> {
+    // `_id` is fixed by the filter; the Entity bookkeeping fields are managed
+    // here so that $set and $setOnInsert never target the same path.
+    const { _id, createdAt, createdBy, updatedAt, updatedBy, ...rest } = (attributes ?? {}) as any;
+    const now = Date.now();
+
+    try {
+      const result = await this.collection.findOneAndUpdate(
+        { _id: new ObjectId(id) } as any,
+        {
+          $set: { ...rest, updatedAt: now, updatedBy: clientId },
+          $setOnInsert: { createdAt: now, createdBy: clientId }
+        } as any,
+        { upsert: true, returnDocument: "after", includeResultMetadata: true }
+      );
+
+      const entity = this.toEntity(result.value);
+      const inserted = Boolean(result.lastErrorObject?.upserted);
+
+      if (inserted) {
+        this.logEvent<EventName.CreateEntity>({
+          name: EventName.CreateEntity,
+          identity: clientId,
+          value: { id: entity._id, collectionType: this.name, count: await this.count() }
+        });
+      } else {
+        this.logEvent<EventName.UpdateEntity>({
+          name: EventName.UpdateEntity,
+          identity: clientId,
+          value: { collectionType: this.name, id: entity._id }
+        });
+      }
+
+      return entity;
+    } catch (err) {
+      console.error("Failed upsertById: ", err);
+      throw err;
+    }
+  }
+
+  /**
    * Updates the first document matching the query
    * @param attributes - Fields to update
    * @param query - Optional FlongoQuery to filter documents

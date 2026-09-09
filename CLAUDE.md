@@ -78,6 +78,7 @@ const users = await collection.getAll(query, pagination);
 - Event logging for audit trails
 - Type-safe operations with generics
 - Atomic operations: `increment()`, `decrement()`, `append()`, `arrRemove()`
+- Upserts: `upsertById()` (ObjectId-keyed, audit-logged), `createOrUpdate()` / `createIfNotExists()` (verbatim `_id`)
 - Batch operations: `batchCreate()`, `batchDelete()`, `updateAll()`
 
 ## Development Commands

@@ -218,6 +218,7 @@ const exists = await collection.exists(query);
 // Update
 await collection.update('user123', { age: 31 });
 await collection.updateAll({ status: 'verified' }, query);
+const settings = await collection.upsertById('user123', { theme: 'dark' }); // update-or-insert by id
 await collection.increment('user123', 'loginCount', 1);
 await collection.append('user123', 'tags', ['admin']);
 
@@ -228,6 +229,30 @@ await collection.batchDelete(['user1', 'user2']);
 // Batch operations
 await collection.batchCreate([user1, user2, user3]);
 ```
+
+#### Upsert by id (`upsertById`)
+
+`upsertById(id, attributes, clientId?)` is the id-keyed counterpart of
+`update()`: one atomic `findOneAndUpdate({ upsert: true })` that applies
+`attributes` as a partial update when a document with that `_id` exists and
+inserts a new document under that `_id` otherwise. It never throws `Error404`,
+is race-safe (last writer wins), and returns the resulting document.
+
+```typescript
+// Idempotent sync — first call creates, every later call updates in place.
+const prefs = await userPrefs.upsertById(userId, { theme: 'dark' }, userId);
+prefs.createdAt; // stamped on insert only
+prefs.updatedAt; // stamped on every call
+```
+
+- The id is converted to an `ObjectId`, so documents it creates are found by
+  `get`, `update`, `delete`, and `_id` queries.
+- `_id` and the `createdAt`/`createdBy`/`updatedAt`/`updatedBy` bookkeeping
+  fields inside `attributes` are ignored; Flongo manages them.
+- With audit logging enabled it records a `create_entity` event on insert and
+  an `update_entity` event on update.
+- For string/custom `_id`s (cache keys, external ids) use `createOrUpdate()`
+  or `createIfNotExists()`, which store the `_id` verbatim.
 
 ### Configuration
 
@@ -530,6 +555,15 @@ const users = await collection.getAll(
 ```
 
 ## Changelog
+
+### 2.4.0
+
+- **`FlongoCollection.upsertById(id, attributes, clientId?)`** — atomic
+  update-or-insert keyed by ObjectId. Partial `$set` on the update path,
+  `$setOnInsert` for `createdAt`/`createdBy` on the insert path, `updatedAt`/
+  `updatedBy` stamped on both. Returns the resulting document and logs a
+  `create_entity` or `update_entity` audit event according to what happened.
+  Complements `createOrUpdate()`, which keeps string `_id`s verbatim.
 
 ### 2.2.0
 
