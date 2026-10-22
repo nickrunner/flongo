@@ -48,7 +48,6 @@ const adults = await users.getAll(
 - 📊 **Rich query operations** - Comparisons, arrays, geospatial, text search
 - 🎛️ **Configurable** - Optional event logging, custom error handling
 - 🗂️ **Declarative indexes** - Declare once, ensure idempotently on every boot
-- 🧪 **Battle-tested** - Extracted from production codebase
 - 📦 **Zero config** - Works with existing MongoDB setup
 
 ## API Reference
